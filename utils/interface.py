@@ -27,7 +27,6 @@ def _calculate_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return np.mean(np.abs((y_true_safe - y_pred_safe) / y_true_safe)) * 100
 
 
-# --- Main Cross-Validation Function ---
 
 
 def cross_validate_model(
@@ -72,39 +71,29 @@ def cross_validate_model(
     while current_train_end_index <= max_train_end_index:
         fold_count += 1
 
-        # 1. Slice the dataframe for the current training window
         df_train = df.iloc[:current_train_end_index]
 
-        # 2. Initialize the model with the current training data
         model = model_class(df_train, **model_params)
 
-        # 3. Iterate through each column designated for conditioning
         for conditioning_col in target_columns:
-            # The index of the future data point we condition on
             conditioning_idx = current_train_end_index + horizon - 1
             conditioning_val = df.loc[df.index[conditioning_idx], conditioning_col]
 
-            # 4. Get the model's conditional prediction
-            # The model returns the names of the columns it can predict and the series
             predicted_cols, predicted_series = model.make_prediction(
                 horizon=horizon, columns=[conditioning_col], values=[conditioning_val]
             )
 
-            # 5. Evaluate the prediction for each variable the model returned
             for i, pred_col in enumerate(predicted_cols):
-                # Get the actual values over the horizon period for comparison
                 start_val_idx = current_train_end_index
                 end_val_idx = current_train_end_index + horizon
                 actual_vals = df[pred_col].iloc[start_val_idx:end_val_idx].values
 
                 predicted_vals = predicted_series[i]
 
-                # 6. Calculate MAPE and store it
                 mape = _calculate_mape(actual_vals, predicted_vals)
                 if not np.isnan(mape):
                     errors[pred_col].append(mape)
 
-        # 7. Move the training window forward by the stride
         current_train_end_index += stride
 
     return dict(errors)
@@ -146,30 +135,25 @@ def build_error_matrix(
     """
     all_columns = df.columns.tolist()
 
-    # Initialize an empty DataFrame to store the results
     error_matrix = pd.DataFrame(index=all_columns, columns=all_columns, dtype=float)
     error_matrix.index.name = "Conditioning Variable"
     error_matrix.columns.name = "Predicted Variable"
 
 
 
-    # Iterate through each variable to use it as the single conditioning variable
     for conditioning_col in all_columns:
-        # Run cross-validation with the current variable as the single target
         cv_errors = cross_validate_model(
             model_class=model_class,
             df=df,
             horizon=horizon,
             stride=stride,
             start_window=start_window,
-            target_columns=[conditioning_col],  # Pass as a list of one
+            target_columns=[conditioning_col],  
             model_params=model_params,
         )
 
-        # Calculate the average error for this run
         avg_errors = calc_avg_error(cv_errors)
 
-        # Fill the corresponding row in our matrix with the results
         for predicted_col, avg_error in avg_errors.items():
             error_matrix.loc[conditioning_col, predicted_col] = avg_error
 
