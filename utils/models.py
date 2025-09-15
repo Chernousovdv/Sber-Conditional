@@ -1,27 +1,16 @@
-import pandas as pd
-import numpy as np
-from collections import defaultdict
-from typing import List, Dict, Any, Type
-from statsmodels.tsa.api import VAR
-import pandas as pd
-from typing import List, Dict, Any
-from prophet import Prophet
-import pmdarima as pm
-import pandas as pd
-from typing import List
-import pmdarima as pm
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import warnings
+from collections import defaultdict
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
+from typing import Any, Dict, List, Tuple, Type
 
-from typing import List, Tuple
-import pandas as pd
-import numpy as np
-import pandas as pd
-import numpy as np
-from typing import List, Dict, Any
-import torch
 import lightning.pytorch as pl
-from pytorch_forecasting import TimeSeriesDataSet, RecurrentNetwork
+import numpy as np
+import pandas as pd
+import pmdarima as pm
+import torch
+from prophet import Prophet
+from pytorch_forecasting import RecurrentNetwork, TimeSeriesDataSet
+from statsmodels.tsa.api import VAR
 from torch.utils.data import DataLoader
 
 
@@ -269,6 +258,7 @@ class MixModel:
         self.linextr_model_cls = LinearExtrapolator
         self.sarima_model_cls = SARIMAModel
         self.params = kwargs
+        print("fitted")
 
     def make_prediction(
         self, horizon: int, columns: List[str], values: List[float]
@@ -278,10 +268,12 @@ class MixModel:
 
         for col in self.all_columns:
             if col == conditioning_col:
-                model = self.linextr_model_cls(self.df)
+                # pass only conditioning column
+                model = self.linextr_model_cls(self.df[[col]], **self.params)
                 preds = model.make_prediction(horizon, [col], values)[1][0]
             elif col in self.sarima_columns:
-                model = self.sarima_model_cls(self.df, **self.params)
+                # pass only SARIMA column
+                model = self.sarima_model_cls(self.df[[col]], **self.params)
                 preds = model.make_prediction(horizon, [col], values)[1][0]
             else:
                 preds = [self.df[col].iloc[-1]] * horizon
