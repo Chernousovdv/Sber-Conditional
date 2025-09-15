@@ -11,7 +11,7 @@ import torch
 from prophet import Prophet
 from pytorch_forecasting import RecurrentNetwork, TimeSeriesDataSet
 from statsmodels.tsa.api import VAR
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader 
 
 
 class DummyConditionalModel:
@@ -280,3 +280,4 @@ class MixModel:
             predictions[col] = preds
 
         return list(predictions.keys()), list(predictions.values())
+

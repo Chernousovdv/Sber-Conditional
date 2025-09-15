@@ -1,16 +1,16 @@
+from collections import defaultdict
+from typing import Any, Dict, List, Type
+
 import matplotlib.dates
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize, TwoSlopeNorm
 import numpy as np
 import pandas as pd
 import scipy.stats as sps
 import seaborn as sns
-import pandas as pd
-import numpy as np
-from collections import defaultdict
-from typing import List, Dict, Any, Type
-import seaborn as sns
-import matplotlib.pyplot as plt
+
 from utils.interface import _calculate_mape
+
 
 
 def visualize_ts(
@@ -105,7 +105,6 @@ def visualize_ts(
     return fig, axes
 
 
-from matplotlib.colors import Normalize
 
 
 def plot_error_matrix(
@@ -201,9 +200,6 @@ def plot_model_pred(
     conditioning_val_idx = cutoff_idx + horizon
     conditioning_val = df.loc[df.index[conditioning_val_idx], conditioning_col]
     conditioning_date = df.index[conditioning_val_idx]
-    print(
-        f"Actual value of '{conditioning_col}' on {conditioning_date.date()} is {conditioning_val:.2f}"
-    )
 
     predicted_cols, predicted_series = model.make_prediction(
         horizon=horizon, columns=[conditioning_col], values=[conditioning_val]
@@ -244,8 +240,7 @@ def plot_model_pred(
         mape = _calculate_mape(actual_vals_horizon, predicted_vals_horizon)
 
         title = (
-            f"Conditional Forecast for {pred_col}\n"
-            f"(Conditioned on {conditioning_col}) | MAPE: {mape:.2f}%"
+            f"Conditional Forecast for {pred_col}"
         )
         plt.title(title, fontsize=16)
         plt.xlabel("Date", fontsize=12)
@@ -265,123 +260,6 @@ def plot_avg_errors(row):
     plt.plot(np.arange(len(sorted)), sorted)
 
 
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.colors import Normalize, TwoSlopeNorm
-import pandas as pd
-
-
-def plot_delta_matrix(
-    error_matrix1,
-    error_matrix2,
-    cmap="RdBu_r",
-    figsize=(12, 8),
-    decimals=1,
-    vmin=-50,  # Anchor to -50
-    vmax=50,  # Anchor to 50
-    center=0,
-    clip=True,
-    title="Delta Error Matrix (Matrix1 - Matrix2)",
-):
-    """
-    Plot the difference between two error matrices (Matrix1 - Matrix2).
-    Colormap anchored to [-50, 50] with center at 0.
-
-    Parameters:
-    -----------
-    error_matrix1, error_matrix2 : pandas.DataFrame
-        Error matrices to compare
-    cmap : str, optional
-        Colormap (diverging colormap recommended)
-    figsize : tuple, optional
-        Figure size
-    decimals : int, optional
-        Decimal places for text annotations
-    vmin, vmax : float, optional
-        Color scale limits anchored to [-50, 50]
-    center : float, optional
-        Center point for diverging colormap (0)
-    clip : bool, optional
-        Whether to clip values to vmin/vmax
-    title : str, optional
-        Plot title
-    """
-
-    # Calculate the difference matrix
-    delta_matrix = error_matrix1 - error_matrix2
-
-    fig, ax = plt.subplots(figsize=figsize)
-    data = delta_matrix.to_numpy(dtype=float)
-
-    # Use diverging normalization centered at 0, anchored to [-50, 50]
-    norm = TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
-
-    # Create colormap and set NaN values to light gray
-    cmap_obj = plt.cm.get_cmap(cmap).copy()
-    cmap_obj.set_bad(color="lightgray")
-
-    # Plot the heatmap with anchored colormap
-    im = ax.imshow(data, cmap=cmap_obj, aspect="auto", norm=norm)
-
-    # Set tick labels
-    xticklabels = [str(c)[:20] for c in delta_matrix.columns]
-    yticklabels = [str(r)[:20] for r in delta_matrix.index]
-
-    ax.set_xticks(np.arange(len(delta_matrix.columns)))
-    ax.set_yticks(np.arange(len(delta_matrix.index)))
-    ax.set_xticklabels(xticklabels, rotation=90)
-    ax.set_yticklabels(yticklabels)
-
-    # Add text annotations for non-NaN values
-    for i in range(data.shape[0]):
-        for j in range(data.shape[1]):
-            val = data[i, j]
-            if not np.isnan(val):
-                # Choose text color based on background brightness
-                # For anchored colormap, we need to calculate normalized position
-                if val >= 0:
-                    norm_val = (val) / (vmax)  # Normalize positive values
-                else:
-                    norm_val = (val) / (abs(vmin))  # Normalize negative values
-
-                # Adjust for the fact that colormap is symmetric around 0
-                text_color = "white" if abs(norm_val) > 0.5 else "black"
-
-                ax.text(
-                    j,
-                    i,
-                    f"{val:+.{decimals}f}",
-                    ha="center",
-                    va="center",
-                    color=text_color,
-                    fontsize=8,
-                    fontweight="bold",
-                )
-
-    # Add colorbar with meaningful label
-    cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Δ Error (Matrix1 - Matrix2)")
-
-    # Add grid lines
-    ax.set_xticks(np.arange(-0.5, len(delta_matrix.columns), 1), minor=True)
-    ax.set_yticks(np.arange(-0.5, len(delta_matrix.index), 1), minor=True)
-    ax.grid(which="minor", color="black", linestyle="-", linewidth=0.5)
-    ax.tick_params(which="minor", bottom=False, left=False)
-
-    # Add informative title with anchoring information
-    plt.title(
-        f"{title}\n"
-        f"Positive = Matrix1 worse (red), Negative = Matrix1 better (blue)\n"
-        f"Colormap anchored to [{vmin}, {vmax}]"
-    )
-
-    plt.tight_layout()
-    plt.show()
-
-    return delta_matrix
-
-
-# Alternative version with better text color logic for anchored colormap
 def plot_delta_matrix_anchored(
     error_matrix1,
     error_matrix2,
@@ -392,26 +270,22 @@ def plot_delta_matrix_anchored(
     vmax=50,
     center=0,
     clip=True,
-    title="Delta Error Matrix (Matrix1 - Matrix2)",
+    title="Delta Error Matrix",
 ):
     """
-    Alternative version with improved text color visibility for anchored colormap.
+    Plot the difference between two error matrices (Matrix1 - Matrix2).
+    Colormap anchored to [-50, 50] with center at 0.
     """
 
     delta_matrix = error_matrix1 - error_matrix2
 
     fig, ax = plt.subplots(figsize=figsize)
     data = delta_matrix.to_numpy(dtype=float)
-
-    # Use diverging normalization
     norm = TwoSlopeNorm(vmin=vmin, vcenter=center, vmax=vmax)
-
     cmap_obj = plt.cm.get_cmap(cmap).copy()
     cmap_obj.set_bad(color="lightgray")
-
     im = ax.imshow(data, cmap=cmap_obj, aspect="auto", norm=norm)
 
-    # Set tick labels
     xticklabels = [str(c)[:20] for c in delta_matrix.columns]
     yticklabels = [str(r)[:20] for r in delta_matrix.index]
 
@@ -420,15 +294,13 @@ def plot_delta_matrix_anchored(
     # ax.set_xticklabels(xticklabels, rotation=90)
     # ax.set_yticklabels(yticklabels)
 
-    # # Improved text color logic for anchored colormap
     # for i in range(data.shape[0]):
     #     for j in range(data.shape[1]):
     #         val = data[i, j]
     #         if not np.isnan(val):
-    #             # Simple but effective text color selection
-    #             if abs(val) > 25:  # Values far from zero get white text
+    #             if abs(val) > 25:
     #                 text_color = "white"
-    #             else:  # Values close to zero get black text
+    #             else:
     #                 text_color = "black"
 
     #             ax.text(
@@ -443,18 +315,14 @@ def plot_delta_matrix_anchored(
     #             )
 
     cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label("Δ Error (Matrix1 - Matrix2)")
+    cbar.set_label("Δ Error")
 
     ax.set_xticks(np.arange(-0.5, len(delta_matrix.columns), 1), minor=True)
     ax.set_yticks(np.arange(-0.5, len(delta_matrix.index), 1), minor=True)
     ax.grid(which="minor", color="black", linestyle="-", linewidth=0.5)
     ax.tick_params(which="minor", bottom=False, left=False)
 
-    plt.title(
-        f"{title}\n"
-        f"Positive = Matrix1 worse, Negative = Matrix1 better\n"
-        f"Colormap anchored to [{vmin}, {vmax}]"
-    )
+    plt.title(f"{title}")
 
     plt.tight_layout()
     plt.show()
