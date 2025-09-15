@@ -3,6 +3,11 @@ import numpy as np
 from collections import defaultdict
 from typing import List, Dict, Any, Type
 from tqdm import tqdm
+import concurrent.futures
+import os
+from typing import Type, Dict, Any, Optional, List
+import pandas as pd
+import numpy as np
 
 
 def _calculate_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
@@ -25,8 +30,6 @@ def _calculate_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     y_pred_safe = y_pred[non_zero_mask]
 
     return np.mean(np.abs((y_true_safe - y_pred_safe) / y_true_safe)) * 100
-
-
 
 
 def cross_validate_model(
@@ -139,8 +142,6 @@ def build_error_matrix(
     error_matrix.index.name = "Conditioning Variable"
     error_matrix.columns.name = "Predicted Variable"
 
-
-
     for conditioning_col in all_columns:
         cv_errors = cross_validate_model(
             model_class=model_class,
@@ -148,12 +149,53 @@ def build_error_matrix(
             horizon=horizon,
             stride=stride,
             start_window=start_window,
-            target_columns=[conditioning_col],  
+            target_columns=[conditioning_col],
             model_params=model_params,
         )
 
         avg_errors = calc_avg_error(cv_errors)
 
+        for predicted_col, avg_error in avg_errors.items():
+            error_matrix.loc[conditioning_col, predicted_col] = avg_error
+
+    return error_matrix
+
+
+def build_short_error_matrix(
+    model_class: Type,
+    df: pd.DataFrame,
+    horizon: int,
+    stride: int,
+    start_window: int,
+    model_params: Dict[str, Any],
+) -> pd.DataFrame:
+    """
+    Builds one row and extends it to all rows
+    """
+    all_columns = df.columns.tolist()
+
+    error_matrix = pd.DataFrame(index=all_columns, columns=all_columns, dtype=float)
+    error_matrix.index.name = "Conditioning Variable"
+    error_matrix.columns.name = "Predicted Variable"
+
+    avg_errors = 0
+    for conditioning_col in all_columns[:1]:
+        cv_errors = cross_validate_model(
+            model_class=model_class,
+            df=df,
+            horizon=horizon,
+            stride=stride,
+            start_window=start_window,
+            target_columns=[conditioning_col],
+            model_params=model_params,
+        )
+
+        avg_errors = calc_avg_error(cv_errors)
+
+        for predicted_col, avg_error in avg_errors.items():
+            error_matrix.loc[conditioning_col, predicted_col] = avg_error
+
+    for conditioning_col in all_columns[1:]:
         for predicted_col, avg_error in avg_errors.items():
             error_matrix.loc[conditioning_col, predicted_col] = avg_error
 

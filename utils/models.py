@@ -3,6 +3,26 @@ import numpy as np
 from collections import defaultdict
 from typing import List, Dict, Any, Type
 from statsmodels.tsa.api import VAR
+import pandas as pd
+from typing import List, Dict, Any
+from prophet import Prophet
+import pmdarima as pm
+import pandas as pd
+from typing import List
+import pmdarima as pm
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
+import warnings
+
+from typing import List, Tuple
+import pandas as pd
+import numpy as np
+import pandas as pd
+import numpy as np
+from typing import List, Dict, Any
+import torch
+import lightning.pytorch as pl
+from pytorch_forecasting import TimeSeriesDataSet, RecurrentNetwork
+from torch.utils.data import DataLoader
 
 
 class DummyConditionalModel:
@@ -61,9 +81,210 @@ class VARModel:
 
         forecast = self.model_fit.forecast(y=forecast_input, steps=horizon)
 
-
         predicted_series_list = forecast.T.tolist()
 
         predictable_cols = self.all_columns
 
         return predictable_cols, predicted_series_list
+
+
+class SARIMAModel:
+    """
+    A model that fits an individual SARIMA model for each time series.
+    """
+
+    def __init__(self, df: pd.DataFrame, **kwargs):
+        self.df = df
+        self.all_columns = df.columns.tolist()
+        self.sarima_params = {
+            "m": kwargs.get("m", 12),
+            "seasonal": kwargs.get("seasonal", True),
+            "stepwise": kwargs.get("stepwise", True),
+            "suppress_warnings": kwargs.get("suppress_warnings", True),
+            "error_action": kwargs.get("error_action", "ignore"),
+        }
+        self.fitted_models = {}
+
+        # Fit a separate auto_arima model for each column
+        for col in self.all_columns:
+            model = pm.auto_arima(df[col], **self.sarima_params)
+            self.fitted_models[col] = model
+
+    def make_prediction(self, horizon: int, columns: List[str], values: List[float]):
+        """
+        Unconditional forecast.
+        """
+        predictable_cols = []
+        predicted_series_list = []
+
+        for col, model in self.fitted_models.items():
+            forecast = model.predict(n_periods=horizon)
+            predicted_series_list.append(forecast.tolist())
+            predictable_cols.append(col)
+
+        return predictable_cols, predicted_series_list
+
+
+class ProphetModel:
+    """
+    It fits an independent Prophet model for each time series variable in the df
+    """
+
+    def __init__(self, df: pd.DataFrame, **kwargs):
+        self.df = df
+        self.all_columns = df.columns.tolist()
+        self.params = kwargs
+        self.fitted_models = {}
+
+        for col in self.all_columns:
+            prophet_df = pd.DataFrame({"ds": df.index, "y": df[col]})
+
+            model = Prophet(**self.params)
+            model.fit(prophet_df)
+            self.fitted_models[col] = model
+
+    def make_prediction(
+        self, horizon: int, columns: List[str], values: List[float]
+    ) -> Tuple[List[str], List[List[float]]]:
+        predictable_cols = []
+        predicted_series_list = []
+
+        for col, model in self.fitted_models.items():
+            future = model.make_future_dataframe(
+                periods=horizon, freq=self.df.index.freq
+            )
+
+            forecast = model.predict(future)
+            predicted_values = forecast["yhat"].iloc[-horizon:].tolist()
+            predictable_cols.append(col)
+            predicted_series_list.append(predicted_values)
+
+        return predictable_cols, predicted_series_list
+
+
+class LinearExtrapolator:
+    """
+    A simple conditional model that linearly extrapolates each conditioned series
+    """
+
+    def __init__(self, df: pd.DataFrame, **kwargs):
+        self.df = df.copy()
+        self.all_columns = list(df.columns)
+        self.params = kwargs
+
+    def make_prediction(
+        self, horizon: int, columns: List[str], values: List[float]
+    ) -> Tuple[List[str], List[List[float]]]:
+
+        predicted_cols: List[str] = []
+        predicted_series_list: List[List[float]] = []
+
+        for col, target in zip(columns, values):
+            last_val = float(self.df[col].iloc[-1])
+            if horizon == 1:
+                preds = [float(target)]
+            else:
+                preds = [
+                    (last_val + (float(target) - last_val) * (t / horizon))
+                    for t in range(1, horizon + 1)
+                ]
+                preds = [float(x) for x in preds]
+
+            predicted_cols.append(col)
+            predicted_series_list.append(preds)
+
+        return predicted_cols, predicted_series_list
+
+
+def tsds(df):
+    df_long = df.reset_index().melt(id_vars="index", value_vars=df.columns.tolist())
+    df_long.columns = ["time", "group", "value"]
+    df_long["time_idx"] = pd.factorize(df_long["time"])[0]
+
+    return TimeSeriesDataSet(
+        df_long[
+            lambda x: x.time_idx
+            <= df_long["time_idx"].max() - self.max_prediction_length
+        ],
+        time_idx="time_idx",
+        target="value",
+        group_ids=["group"],
+        max_encoder_length=self.max_encoder_length,
+        max_prediction_length=self.max_prediction_length,
+        static_categoricals=["group"],
+        time_varying_known_reals=["time_idx"],
+        time_varying_unknown_reals=["value"],
+        allow_missing_timesteps=True,
+    )
+
+
+class torchForecastingRNN:
+    def __init__(self, df, **kwargs):
+        self.df = df
+        self.params = kwargs
+        self.max_prediction_length = kwargs.get("horizon", 12)
+        self.dataset = tsds(df)
+
+        train_dataloader = self.dataset.to_dataloader(
+            train=True, batch_size=kwargs.get("batch_size", 64), num_workers=0
+        )
+
+        self.model = RecurrentNetwork.from_dataset(
+            self.dataset,
+            hidden_size=kwargs.get("hidden_size", 20),
+            rnn_layers=kwargs.get("rnn_layers", 2),
+            learning_rate=kwargs.get("learning_rate", 0.01),
+        )
+
+        trainer = pl.Trainer(
+            max_epochs=kwargs.get("max_epochs", 30),
+        )
+
+        trainer.fit(self.model, train_dataloaders=train_dataloader)
+
+    def make_prediction(self, horizon, columns, values):
+        pred_dataloader = self.dataset.to_dataloader(
+            train=False,
+            batch_size=len(self.df.columns.tolist()),
+        )
+
+        raw_predictions = self.model.predict(pred_dataloader, return_index=False)
+        predicted_series_list = raw_predictions.numpy().tolist()
+
+        return self.df.columns.tolist(), predicted_series_list
+
+
+class MixModel:
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        **kwargs,
+    ):
+        self.df = df
+        self.all_columns = df.columns.tolist()
+        self.sarima_columns = {
+            "Огурцы тепличные, руб./кг",
+            "Томаты тепличные, руб./кг",
+        }
+        self.linextr_model_cls = LinearExtrapolator
+        self.sarima_model_cls = SARIMAModel
+        self.params = kwargs
+
+    def make_prediction(
+        self, horizon: int, columns: List[str], values: List[float]
+    ) -> Tuple[List[str], List[List[float]]]:
+        conditioning_col = columns[0]
+        predictions: Dict[str, List[float]] = {}
+
+        for col in self.all_columns:
+            if col == conditioning_col:
+                model = self.linextr_model_cls(self.df)
+                preds = model.make_prediction(horizon, [col], values)[1][0]
+            elif col in self.sarima_columns:
+                model = self.sarima_model_cls(self.df, **self.params)
+                preds = model.make_prediction(horizon, [col], values)[1][0]
+            else:
+                preds = [self.df[col].iloc[-1]] * horizon
+            predictions[col] = preds
+
+        return list(predictions.keys()), list(predictions.values())

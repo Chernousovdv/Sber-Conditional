@@ -14,3 +14,4 @@
 
 ```python
 df = pd.read_csv("path-to-file.csv", index_col=0)
+df.index = pd.to_datetime(df.index)
