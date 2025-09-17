@@ -11,7 +11,12 @@ import torch
 from prophet import Prophet
 from pytorch_forecasting import RecurrentNetwork, TimeSeriesDataSet
 from statsmodels.tsa.api import VAR
-from torch.utils.data import DataLoader 
+import pandas as pd
+from typing import List, Dict, Any
+from prophet import Prophet
+import pmdarima as pm
+import statsmodels.api as sm
+from torch.utils.data import DataLoader
 
 
 class DummyConditionalModel:
@@ -258,7 +263,6 @@ class MixModel:
         self.linextr_model_cls = LinearExtrapolator
         self.sarima_model_cls = SARIMAModel
         self.params = kwargs
-        print("fitted")
 
     def make_prediction(
         self, horizon: int, columns: List[str], values: List[float]
@@ -281,3 +285,51 @@ class MixModel:
 
         return list(predictions.keys()), list(predictions.values())
 
+
+class DynamicFactorModel:
+    """
+    DFM
+    - k_factors (int): The number of unobserved latent factors. Defaults to 1.
+    - factor_order (int): The order of the vector autoregression (VAR) for the factors. Defaults to 1.
+    - error_order (int): The order of the autoregression for the error term. Defaults to 1.
+    """
+
+    def __init__(self, df: pd.DataFrame, **kwargs):
+        self.df = df
+        self.all_columns = df.columns.tolist()
+        self.fitted_model = None
+
+        k_factors = kwargs.get("k_factors", 1)
+        factor_order = kwargs.get("factor_order", 1)
+        error_order = kwargs.get("error_order", 1)
+        maxiter = kwargs.get("maxiter", 50)
+
+        try:
+
+            model = sm.tsa.DynamicFactor(
+                df,
+                k_factors=k_factors,
+                factor_order=factor_order,
+                error_order=error_order,
+                enforce_stationarity=False,
+            )
+            self.fitted_model = model.fit(disp=False, maxiter=maxiter)
+        except Exception as e:
+            print(f"Warning: Dynamic Factor model could not be fitted. Error: {e}")
+
+    def make_prediction(self, horizon: int, columns: List[str], values: List[float]):
+        """
+        Generates forecasts for all variables using the fitted Dynamic Factor model.
+
+        Note: This is an unconditional forecast. The 'columns' and 'values'
+              arguments are ignored.
+        """
+        if not self.fitted_model:
+            return [], []
+
+        forecast = self.fitted_model.forecast(steps=horizon)
+
+        predictable_cols = self.all_columns
+        predicted_series_list = forecast.T.values.tolist()
+
+        return predictable_cols, predicted_series_list

@@ -12,7 +12,6 @@ import seaborn as sns
 from utils.interface import _calculate_mape
 
 
-
 def visualize_ts(
     df,
     columns,
@@ -105,8 +104,6 @@ def visualize_ts(
     return fig, axes
 
 
-
-
 def plot_error_matrix(
     error_matrix,
     cmap="RdYlGn_r",
@@ -180,7 +177,6 @@ def plot_model_pred(
         conditioning_col: The column name to use for the future condition.
         horizon: The number of future time steps to predict.
         cutoff_date: A string representing the date for the train/test split
-                     (e.g., '2025-01-31').
     """
     try:
         cutoff_idx = df.index.get_loc(cutoff_date)
@@ -239,9 +235,7 @@ def plot_model_pred(
         predicted_vals_horizon = predicted_series[i]
         mape = _calculate_mape(actual_vals_horizon, predicted_vals_horizon)
 
-        title = (
-            f"Conditional Forecast for {pred_col}"
-        )
+        title = f"Conditional Forecast for {pred_col}"
         plt.title(title, fontsize=16)
         plt.xlabel("Date", fontsize=12)
         plt.ylabel("Value", fontsize=12)
