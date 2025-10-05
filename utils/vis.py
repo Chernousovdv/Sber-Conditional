@@ -624,3 +624,46 @@ def plot_tsne_similarity_plotly(
     )
 
     fig.show()
+
+
+def plot_dist_matrix(  # TODO redo for distance or think of a way to convert pvalue to dist
+    error_matrix,
+    cmap="RdYlGn_r",
+    figsize=(15, 12),
+    distance="Distance",
+    title=None,
+    labels=True,
+    anchor=False,
+):
+    if title is None:
+        title = f"{distance} Matrix"
+
+    fig, ax = plt.subplots(figsize=figsize)
+    data = error_matrix.to_numpy(dtype=float)
+    cmap_obj = plt.cm.get_cmap(cmap).copy()
+    cmap_obj.set_bad(color="lightgray")
+
+    if anchor:
+        norm = TwoSlopeNorm(vmin=0, vcenter=5, vmax=10)
+        im = ax.imshow(data, cmap=cmap_obj, aspect="auto", norm=norm)
+    else:
+        im = ax.imshow(data, cmap=cmap_obj, aspect="auto")
+
+    if labels:
+        ax.set_xticks(np.arange(len(error_matrix.columns)))
+        ax.set_yticks(np.arange(len(error_matrix.index)))
+        xticklabels = [str(c)[:20] for c in error_matrix.columns]
+        yticklabels = [str(r)[:20] for r in error_matrix.index]
+        ax.set_xticklabels(xticklabels, rotation=90)
+        ax.set_yticklabels(yticklabels)
+
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label(distance)
+    ax.set_xticks(np.arange(-0.5, len(error_matrix.columns), 1), minor=True)
+    ax.set_yticks(np.arange(-0.5, len(error_matrix.index), 1), minor=True)
+    ax.grid(which="minor", color="black", linestyle="-", linewidth=0.5)
+    ax.tick_params(which="minor", bottom=False, left=False)
+
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
