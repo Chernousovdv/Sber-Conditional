@@ -17,6 +17,7 @@ from prophet import Prophet
 import pmdarima as pm
 import statsmodels.api as sm
 from torch.utils.data import DataLoader
+from sktime.forecasting.vecm import VECM
 
 
 class DummyConditionalModel:
@@ -70,13 +71,9 @@ class VARModel:
             return [], []
 
         lag_order = self.model_fit.k_ar
-
         forecast_input = self.df.values[-lag_order:]
-
         forecast = self.model_fit.forecast(y=forecast_input, steps=horizon)
-
         predicted_series_list = forecast.T.tolist()
-
         predictable_cols = self.all_columns
 
         return predictable_cols, predicted_series_list
@@ -286,7 +283,7 @@ class MixModel:
         return list(predictions.keys()), list(predictions.values())
 
 
-class DynamicFactorModel:
+class DynamicFactorModel:  # TODO check the right order
     """
     DFM
     - k_factors (int): The number of unobserved latent factors. Defaults to 1.
@@ -329,6 +326,25 @@ class DynamicFactorModel:
 
         forecast = self.fitted_model.forecast(steps=horizon)
 
+        predictable_cols = self.all_columns
+        predicted_series_list = forecast.T.values.tolist()
+
+        return predictable_cols, predicted_series_list
+
+
+class SimpleVECM:
+    def __init__(self, df: pd.DataFrame, **kwargs):
+        self.df = df
+        self.all_columns = df.columns.tolist()
+        self.fitted_model = None
+
+        model = VECM(**kwargs)
+        self.fitted_model = model.fit(y=df)
+
+    def make_prediction(self, horizon: int, columns: List[str], values: List[float]):
+
+        fh = np.arange(1, horizon + 1)
+        forecast = self.fitted_model.predict(fh=fh)
         predictable_cols = self.all_columns
         predicted_series_list = forecast.T.values.tolist()
 

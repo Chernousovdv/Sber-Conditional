@@ -1,0 +1,20 @@
+Hyperparameter tuning for DFM   (APK and chemicals)    
+
+Cluster analysis notebook
+
+Hyperparameter tuning Prophet   (APK, chemicals)              
+
+VECM    (research + write code + run)
+
+Delete lightning_logs
+
+Add Sarima to chemical/APK model analysis notebook (from sarima_matrices notebook)
+
+
+
+==============================================
+Способы кластеризации на основе лин зависимостей (пока коинтеграция)
+Хотим разбить на коинтеграция кластеры
+2 задачи: кластеризация, предсказание рядов по тренду
+Обсудить интерфейс с Дастаном
+

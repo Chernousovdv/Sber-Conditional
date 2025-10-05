@@ -1,23 +1,13 @@
-import pandas as pd
 import numpy as np
 from collections import defaultdict
 from typing import List, Dict, Any, Type
-from tqdm import tqdm
-import concurrent.futures
+import pandas as pd
+import pmdarima as pm
+from pathlib import Path
 import os
 
 
 def _calculate_mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """
-    Calculates the Mean Absolute Percentage Error (MAPE).
-
-    Args:
-        y_true: Numpy array of true values.
-        y_pred: Numpy array of predicted values.
-
-    Returns:
-        The MAPE value as a percentage. Returns NaN if all true values are zero.
-    """
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     non_zero_mask = y_true != 0
     if not np.any(non_zero_mask):
@@ -38,31 +28,6 @@ def cross_validate_model(
     target_columns: List[str],
     model_params: Dict[str, Any],
 ) -> Dict[str, List[float]]:
-    """
-    Performs walk-forward cross-validation for a conditional time series model.
-
-    In each step, it trains the model on a window of past data, makes a conditional
-    prediction for a future `horizon`, and evaluates the prediction against the
-    actual data.
-
-    Args:
-        model_class: The class of the model to be cross-validated. The class
-                     must have an __init__(df, **kwargs) method and a
-                     make_prediction(horizon, columns, values) method.
-        df: A pandas DataFrame with a datetime index and series as columns.
-        horizon: The number of future time steps to predict.
-        stride: The number of time steps to move the training window forward
-                in each cross-validation fold.
-        start_window: The size of the initial training window.
-        target_columns: A list of column names to use for conditioning. In each fold,
-                        the function will iterate through these columns, using the
-                        actual future value of each as a condition.
-        model_params: A dictionary of parameters to pass to the model's constructor.
-
-    Returns:
-        A dictionary where keys are the names of the predicted columns and
-        values are lists of MAPE scores from each validation fold.
-    """
     errors = defaultdict(list)
     max_train_end_index = len(df) - horizon
     current_train_end_index = start_window
@@ -116,23 +81,6 @@ def build_error_matrix(
     start_window: int,
     model_params: Dict[str, Any],
 ) -> pd.DataFrame:
-    """
-    Builds a matrix of forecast errors for a conditional model.
-
-    The matrix shows the average prediction error (MAPE) for each variable (columns)
-    when conditioned on the future value of another variable (rows).
-
-    Args:
-        model_class: The class of the model to be cross-validated.
-        df: A pandas DataFrame with a datetime index and series as columns.
-        horizon: The number of future time steps to predict.
-        stride: The number of time steps to move the window forward in each fold.
-        start_window: The size of the initial training window.
-        model_params: A dictionary of parameters for the model's constructor.
-
-    Returns:
-        A pandas DataFrame representing the error matrix.
-    """
     all_columns = df.columns.tolist()
 
     error_matrix = pd.DataFrame(index=all_columns, columns=all_columns, dtype=float)
@@ -166,9 +114,7 @@ def build_short_error_matrix(
     start_window: int,
     model_params: Dict[str, Any],
 ) -> pd.DataFrame:
-    """
-    Builds one row and extends it to all rows
-    """
+
     all_columns = df.columns.tolist()
 
     error_matrix = pd.DataFrame(index=all_columns, columns=all_columns, dtype=float)
@@ -199,5 +145,106 @@ def build_short_error_matrix(
     return error_matrix
 
 
+class SARIMAModel:
+    """
+    A model that fits an individual SARIMA model for each time series.
+    """
+
+    def __init__(self, df: pd.DataFrame, **kwargs):
+        self.df = df
+        self.all_columns = df.columns.tolist()
+        self.sarima_params = {
+            "m": kwargs.get("m", 12),
+            "seasonal": kwargs.get("seasonal", True),
+            "stepwise": kwargs.get("stepwise", True),
+            "suppress_warnings": kwargs.get("suppress_warnings", True),
+            "error_action": kwargs.get("error_action", "ignore"),
+        }
+        self.fitted_models = {}
+
+        # Fit a separate auto_arima model for each column
+        for col in self.all_columns:
+            model = pm.auto_arima(df[col], **self.sarima_params)
+            self.fitted_models[col] = model
+
+    def make_prediction(self, horizon: int, columns: List[str], values: List[float]):
+        """
+        Unconditional forecast.
+        """
+        predictable_cols = []
+        predicted_series_list = []
+
+        for col, model in self.fitted_models.items():
+            forecast = model.predict(n_periods=horizon)
+            predicted_series_list.append(forecast.tolist())
+            predictable_cols.append(col)
+
+        return predictable_cols, predicted_series_list
 
 
+# ==================================================================================================
+# ==================================================================================================
+
+# ==================================================================================================
+# ==================================================================================================
+
+# Read data
+data_path = "/app/Data/apk_nona.csv"
+df = pd.read_csv(data_path, index_col=0)
+df.index = pd.to_datetime(df.index)
+
+# Parameters
+matrix_params = {
+    "model_class": SARIMAModel,
+    "df": df,
+    "horizon": 12,
+    "stride": 10,
+    "start_window": 60,
+    "model_params": {},  # seasonality is 12 by default
+}
+sarima_model_matrices = {}
+horizon_list = [24, 36, 48]
+output_dir = "/app/code/"  # Проще без вложенности
+output_path = f"{output_dir}/test_worKED.csv"
+df.to_csv(output_path, index=True)
+# Perform calculations
+for horizon in horizon_list:
+    matrix_params["horizon"] = horizon
+    err_mat = build_short_error_matrix(**matrix_params)
+
+    # Используйте уже смонтированную директорию
+
+    output_path = f"{output_dir}/sarima_apk_{horizon}.csv"
+    err_mat.to_csv(output_path, index=True)
+
+
+# Chemicals
+
+# Read data
+data_path = "/app/Data/chemicals_nona.csv"
+df = pd.read_csv(data_path, index_col=0)
+df.index = pd.to_datetime(df.index)
+
+# Parameters
+matrix_params = {
+    "model_class": SARIMAModel,
+    "df": df,
+    "horizon": 12,
+    "stride": 10,
+    "start_window": 60,
+    "model_params": {},  # seasonality is 12 by default
+}
+sarima_model_matrices = {}
+horizon_list = [24, 36, 48]
+
+output_dir = "/app/code/"  # Проще без вложенности
+
+# Perform calculations
+for horizon in horizon_list:
+    matrix_params["horizon"] = horizon
+    err_mat = build_short_error_matrix(**matrix_params)
+
+    # Используйте уже смонтированную директорию
+
+    output_path = f"{output_dir}/sarima_chemicals_{horizon}.csv"
+    err_mat.to_csv(output_path, index=True)
