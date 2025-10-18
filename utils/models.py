@@ -349,3 +349,52 @@ class SimpleVECM:
         predicted_series_list = forecast.T.values.tolist()
 
         return predictable_cols, predicted_series_list
+
+
+# =============================================
+# =============================================
+class ClusterModel:
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        clusters,
+        predict_outside_cluster=True,
+        **kwargs,
+    ):
+        self.df = df
+        self.all_columns = df.columns.tolist()
+        self.sarima_columns = {
+            "Огурцы тепличные, руб./кг",
+            "Томаты тепличные, руб./кг",
+        }
+        self.linextr_model_cls = LinearExtrapolator
+        self.sarima_model_cls = SARIMAModel
+        self.clusters = clusters
+        self.predict_outside_cluster = predict_outside_cluster
+        self.params = kwargs
+
+    def make_prediction(
+        self, horizon: int, columns: List[str], values: List[float]
+    ) -> Tuple[List[str], List[List[float]]]:
+        conditioning_col = columns[0]
+        predictions: Dict[str, List[float]] = {}
+
+        for col in self.all_columns:
+            if self.clusters[col] == self.clusters[conditioning_col]:
+                # pass only conditioning column
+                scale_coef = self.df[conditioning_col].iloc[-1] / self.df[col].iloc[-1]
+                model = self.linextr_model_cls(self.df[[col]], **self.params)
+                preds = model.make_prediction(horizon, [col], values / scale_coef)[1][0]
+            elif col in self.sarima_columns:
+                # pass only SARIMA column
+                model = self.sarima_model_cls(self.df[[col]], **self.params)
+                preds = model.make_prediction(horizon, [col], values)[1][0]
+            else:
+                # Naive
+                if not self.predict_outside_cluster:
+                    continue
+
+                preds = [self.df[col].iloc[-1]] * horizon
+            predictions[col] = preds
+
+        return list(predictions.keys()), list(predictions.values())

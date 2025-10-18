@@ -248,6 +248,7 @@ def plot_model_pred(
 
 def calc_average_error(matrix):
     print(f"{np.mean(matrix):.2f}%")
+    return np.mean(matrix)
 
 
 def plot_avg_errors(row):
@@ -667,3 +668,91 @@ def plot_dist_matrix(  # TODO redo for distance or think of a way to convert pva
     plt.title(title)
     plt.tight_layout()
     plt.show()
+
+
+def plot_cluster_model_pred(
+    clusters,
+    cluster,
+    df: pd.DataFrame,
+    model_params: Dict[str, Any],
+    horizon: int,
+    cutoff_date: str,
+):
+    """
+    Trains a model, makes a conditional prediction, and plots it against actuals.
+
+    Args:
+        model_class: The class of the model to be used.
+        df: The full pandas DataFrame with a datetime index.
+        model_params: A dictionary of parameters for the model's constructor.
+        conditioning_col: The column name to use for the future condition.
+        horizon: The number of future time steps to predict.
+        cutoff_date: A string representing the date for the train/test split
+    """
+
+    conditioning_col = 1
+    try:
+        cutoff_idx = df.index.get_loc(cutoff_date)
+    except KeyError:
+        print("Error")
+        return
+
+    df_train = df.iloc[: cutoff_idx + 1]
+
+    if cutoff_idx + horizon >= len(df):
+        print("Error")
+
+        return
+
+    model = model_class(df_train, **model_params)
+
+    conditioning_val_idx = cutoff_idx + horizon
+    conditioning_val = df.loc[df.index[conditioning_val_idx], conditioning_col]
+    conditioning_date = df.index[conditioning_val_idx]
+
+    predicted_cols, predicted_series = model.make_prediction(
+        horizon=horizon, columns=[conditioning_col], values=[conditioning_val]
+    )
+
+    for i, pred_col in enumerate(predicted_cols):
+        plt.figure(figsize=(14, 7))
+
+        plt.plot(
+            df.index,
+            df[pred_col],
+            label=f"Actual {pred_col}",
+            color="royalblue",
+            linewidth=2,
+        )
+
+        forecast_dates = df.index[cutoff_idx + 1 : cutoff_idx + 1 + horizon]
+
+        plt.plot(
+            forecast_dates,
+            predicted_series[i],
+            label=f"Predicted {pred_col}",
+            color="darkorange",
+            linestyle="--",
+            marker="o",
+        )
+
+        plt.axvline(
+            x=df.index[cutoff_idx],
+            color="crimson",
+            linestyle="-.",
+            linewidth=2,
+            label="Forecast Start",
+        )
+
+        actual_vals_horizon = df.loc[forecast_dates, pred_col].values
+        predicted_vals_horizon = predicted_series[i]
+        mape = _calculate_mape(actual_vals_horizon, predicted_vals_horizon)
+
+        title = f"Conditional Forecast for {pred_col}"
+        plt.title(title, fontsize=16)
+        plt.xlabel("Date", fontsize=12)
+        plt.ylabel("Value", fontsize=12)
+        plt.legend()
+        plt.grid(True, which="both", linestyle="--", linewidth=0.5)
+        plt.tight_layout()
+        plt.show()

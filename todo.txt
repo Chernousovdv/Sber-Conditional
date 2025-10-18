@@ -18,3 +18,4 @@ Add Sarima to chemical/APK model analysis notebook (from sarima_matrices noteboo
 2 задачи: кластеризация, предсказание рядов по тренду
 Обсудить интерфейс с Дастаном
 
+pairwise scatter plot inside each cluster
