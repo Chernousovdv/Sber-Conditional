@@ -48,3 +48,32 @@ CATEGORY_MAP = {
     "Табак (USD)": "Stimuli Crops",
     "Табак": "Stimuli Crops"
 }
+
+CAT_MAP_ENCODING = {
+ 'Sugar & Flour': 0,
+ 'Vegetables': 1,
+ 'Oils & Meals': 2,
+ 'Fish': 3,
+ 'Livestock & Meat': 4,
+ 'Stimuli Crops': 5,
+ 'Processed Meat': 6,
+ 'Grains & Seeds': 7
+}
+
+CATEGORY_MAP_CHEMICALS = {
+    "Карбамид (FOB Южный)": "dip",
+    "Моноаммонийфосфат, MAP (FOB Балтика)": "dip",
+    "Апатитовый концетрат (FOB Morocco)": "dip",
+    "Аммиак (FOB Черное море)": "dip",
+    "Аммиачная селитра (FOB Черное море)": "dip",
+    "Хлорид калия (CFR Ю-В Азия)": "dip",
+    "Капролактам импортный контракт (Тайвань и Ю. Корея) CFR Азия": "bump",
+    "Метанол": "bump",
+    "Бензол, CFR Япония": "bump",
+    "Этилен, CFR Китай": "bump"   
+}
+
+CATEGORY_MAP_CHEMICALS_ENCODING = {
+ 'dip': 0,
+ 'bump': 1
+}

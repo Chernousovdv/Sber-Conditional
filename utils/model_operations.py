@@ -1,8 +1,42 @@
+import pickle
+from pathlib import Path
 import pandas as pd
 import warnings
 from typing import Optional, Tuple, Any
-import pickle
+import shap
+import matplotlib.pyplot as plt
 import numpy as np
+import os
+from sklearn.pipeline import Pipeline
+
+
+def save_shap(model,
+              train_data: pd.DataFrame,
+              model_name: str):
+    explainer = shap.TreeExplainer(model)
+    shap_values = np.array(explainer.shap_values(train_data))
+    os.makedirs(f"results/{save_dir}/{model_name}_shaps", exist_ok=True)
+    shap.summary_plot(shap_values,
+                      X_train,
+                      max_display=10,
+                      show=False)
+    plt.savefig(f"results/{save_dir}/{model_name}_shaps/{model_name}_shap.png") #.png,.pdf will also support here
+
+
+def save_model(model,
+               train_data: pd.DataFrame,
+               save_dir: str,
+               model_name: str,
+               is_shap: bool = True):
+    os.makedirs(f"results/{save_dir}", exist_ok=True)
+    prev_results = Path(f"results/{save_dir}/{model_name}.pkl")
+    if prev_results.is_file():
+        print(f"Skipping {prev_results}\texperiment was made.")
+        return
+    with open(prev_results, 'wb') as file:
+        pickle.dump(model, file)
+    if is_shap:
+        save_shap(model, train_data, model_name)
 
 
 def _ensure_monthly_index_and_align_exog(
@@ -133,12 +167,6 @@ def _ensure_monthly_index_and_align_exog(
         return series, exog_reindexed
     except Exception as e:
         raise ValueError("Could not align exog to series index. Provide exog with same DatetimeIndex or matching length.") from e
-
-
-def save_model_to_file(model, save_dir: str):
-    
-    with open('random_forest_regressor.pkl', 'wb') as file:
-        pickle.dump(model, file)
 
 
 def _get_final_estimator(estimator):

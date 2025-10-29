@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from .constants import CATEGORY_MAP
 from pathlib import Path
 import seaborn as sns
-from typing import Optional
+from typing import Optional, Tuple
 from copy import deepcopy
 
 
@@ -56,25 +56,47 @@ def compute_mode_and_stats(df_subset: pd.DataFrame):
     return top_per_fold, mode_feature, mode_count, grouped
 
 
-def _read_feat_importance(predictor_name: str, target: str):
+def _read_feat_importance(predictor_name: str,
+                          target: str,
+                          algo_name: str=""):
     try:
-        return pd.read_csv(f"results/{target}_{predictor_name}_tables/feature_imp_df_results.csv")
+        path_to_df = f"results/{algo_name}_{target}_{predictor_name}_tables"
+        detailed_df = f"{path_to_df}/detailed_df_results.csv"
+        feat_importance_df = f"{path_to_df}/feature_imp_df_results.csv"
+        preds_df = f"{path_to_df}/preds_df_results.csv"
+        summary_df = f"{path_to_df}/summary_df_results.csv"
+        return pd.read_csv(detailed_df), pd.read_csv(feat_importance_df), pd.read_csv(preds_df), pd.read_csv(summary_df)
     except Exception:
+        predictor_name_cp = predictor_name
+        target_cp = target
         if len(predictor_name) + len(target) >= 120:
             #print(f"len exceed fpr: predictor:{normed_predict_col_name}\tand target: {normed_target_col_name}")
             predictor_name_cp = predictor_name[:50]
             target_cp = target[:50]
             #print(f"cut: predictor:{normed_predict_col_name}\tand target: {normed_target_col_name}")
         try:
-            return pd.read_csv(f"results/{target_cp}_{predictor_name_cp}_tables/feature_imp_df_results.csv")
+            path_to_df = f"results/{algo_name}_{target_cp}_{predictor_name_cp}_tables"
+            detailed_df = f"{path_to_df}/detailed_df_results.csv"
+            feat_importance_df = f"{path_to_df}/feature_imp_df_results.csv"
+            preds_df = f"{path_to_df}/preds_df_results.csv"
+            summary_df = f"{path_to_df}/summary_df_results.csv"
+            return pd.read_csv(detailed_df), pd.read_csv(feat_importance_df), pd.read_csv(preds_df), pd.read_csv(summary_df)
+            # return pd.read_csv(f"results/{algo_name}_{target_cp}_{predictor_name_cp}_tables/feature_imp_df_results.csv")
         except Exception:
+            predictor_name_1 = predictor_name
+            target_1 = target
             if len(predictor_name) + len(target) >= 90:
                 #print(f"len exceed fpr: predictor:{normed_predict_col_name}\tand target: {normed_target_col_name}")
                 predictor_name_1 = predictor_name[:50]
                 target_1 = target[:50]
                 #print(f"cut: predictor:{normed_predict_col_name}\tand target: {normed_target_col_name}")
             try:
-                return pd.read_csv(f"results/{target_1}_{predictor_name_1}_tables/feature_imp_df_results.csv")
+                path_to_df = f"results/{algo_name}_{target_1}_{predictor_name_1}_tables"
+                detailed_df = f"{path_to_df}/detailed_df_results.csv"
+                feat_importance_df = f"{path_to_df}/feature_imp_df_results.csv"
+                preds_df = f"{path_to_df}/preds_df_results.csv"
+                summary_df = f"{path_to_df}/summary_df_results.csv"
+                return pd.read_csv(detailed_df), pd.read_csv(feat_importance_df), pd.read_csv(preds_df), pd.read_csv(summary_df)
             except Exception:
                 raise ValueError(f"There is no feature importance for {target}_{predictor_name}_tables")
 
@@ -82,6 +104,7 @@ def _read_feat_importance(predictor_name: str, target: str):
 def plot_mode_top_features_grid(
     target_series: str,
     predictor_series: str,
+    algo_name: str="",
     models: list | None = None,
     horizons: list | None = None,
     lags_list: list | None = None,
@@ -103,7 +126,7 @@ def plot_mode_top_features_grid(
     predictor_series : str
         The predictor_series value (filter), may be "" if not used.
     models : list or None
-        List of model_family values to produce figures for. If None -> use all present.
+        list of model_family values to produce figures for. If None -> use all present.
     horizons : list or None
         horizons to include (if None use unique sorted feature_imp_df.horizon)
     lags_list : list or None
@@ -117,7 +140,7 @@ def plot_mode_top_features_grid(
     show : bool
         Whether to call plt.show() at the end of each figure.
     """
-    feature_imp_df = _read_feat_importance(predictor_series, target_series)
+    _, feature_imp_df, _, _ = _read_feat_importance(predictor_series, target_series, algo_name)
     required_cols = {'target_series','predictor_series','model_family','horizon','step','lags','fold_index','feature_name','importance_norm'}
     if not required_cols.issubset(set(feature_imp_df.columns)):
         missing = required_cols.difference(set(feature_imp_df.columns))
@@ -270,9 +293,207 @@ def _map_owner_to_category(owner: Optional[str]) -> str:
         return "USDRUB"
     return CATEGORY_MAP.get(owner, "USDRUB")
 
+
+# --- aggregator: collect fold-level mape rows with categories ---
+def aggregate_mape_by_category(
+    products: list[str] = ALL_PRODUCTS,
+    algo_name: str = "",
+    models: Optional[list[str]] = None,
+    horizon: Optional[int] = None,
+    lags: Optional[int] = None,
+    verbose: bool = True
+) -> pd.DataFrame:
+    """
+    Iterate over all (predictor, target) pairs in `products`, read detailed_df_results,
+    filter by model/horizon/lags, attach predictor/target categories, and return
+    a DataFrame with one row per fold-level observation:
+      ['predictor_series','predictor_category','target_series','target_category',
+       'model','horizon_months','lags','fold_index','cutoff','mape']
+    """
+    rows = []
+    missing_pairs = []
+    for target in products:
+        for predictor in products:
+            try:
+                df_det, _, _, _ = _read_feat_importance(predictor, target, algo_name)
+            except Exception as e:
+                missing_pairs.append((predictor, target))
+                if verbose:
+                    print(f"[WARN] missing detailed for {predictor}->{target}: {e}")
+                continue
+
+            # required columns in your detailed_df: model, lags, horizon_months, fold_index, cutoff, mape
+            if 'mape' not in df_det.columns:
+                if verbose:
+                    print(f"[WARN] file for {predictor}->{target} lacks 'mape' -> skipping")
+                continue
+
+            df = df_det.copy()
+
+            # unify column names (some code used 'horizon_months' as name)
+            horizon_col = 'horizon_months' if 'horizon_months' in df.columns else ('horizon' if 'horizon' in df.columns else None)
+            if horizon_col is None:
+                if verbose:
+                    print(f"[WARN] no horizon column in {predictor}->{target}; skipping")
+                continue
+
+            # filter by model_family if requested
+            if models is not None and 'model' in df.columns:
+                df = df[df['model'].isin(models)]
+
+            # filter by horizon / lags if provided
+            if horizon is not None:
+                df = df[df[horizon_col] == horizon]
+            if lags is not None and 'lags' in df.columns:
+                df = df[df['lags'] == lags]
+
+            if df.empty:
+                continue
+
+            # ensure fold_index exists
+            if 'fold_index' not in df.columns:
+                # if only aggregated was saved, try to use row numbers as fold index
+                df = df.reset_index().rename(columns={'index': 'fold_index'})
+
+            # attach predictor/target columns (if not present)
+            if 'predictor_series' not in df.columns:
+                df['predictor_series'] = predictor
+            if 'target_series' not in df.columns:
+                df['target_series'] = target
+
+            # map to categories
+            df['predictor_category'] = df['predictor_series'].map(CATEGORY_MAP).fillna('Other')
+            df['target_category'] = df['target_series'].map(CATEGORY_MAP).fillna('Other')
+
+            # keep relevant columns and append
+            keep_cols = ['predictor_series','predictor_category','target_series','target_category',
+                         'model' if 'model' in df.columns else 'model',
+                         horizon_col, 'lags' if 'lags' in df.columns else 'lags',
+                         'fold_index','cutoff' if 'cutoff' in df.columns else 'cutoff',
+                         'mape']
+            # filter only columns that exist
+            keep_cols = [c for c in keep_cols if c in df.columns]
+            df_keep = df[keep_cols].copy()
+            # unify name of horizon col to 'horizon_months' for later convenience
+            if horizon_col != 'horizon_months':
+                df_keep = df_keep.rename(columns={horizon_col: 'horizon_months'})
+
+            rows.append(df_keep)
+
+    if not rows:
+        if verbose:
+            print("[INFO] No detailed MAPE rows were loaded.")
+        return pd.DataFrame()
+    full = pd.concat(rows, ignore_index=True)
+
+    # convert numeric columns from object if necessary
+    full['mape'] = pd.to_numeric(full['mape'], errors='coerce')
+
+    return full
+
+# --- plotting function: heatmap of mean/median MAPE per predictor_cat -> target_cat ---
+def plot_mape_heatmap(
+    folded_df: pd.DataFrame,
+    agg_method: str = 'mean',    # 'mean' or 'median'
+    horizon: int = 0,
+    lag: int = 0,
+    normalize_rows: bool = False,
+    cmap: str = 'viridis',
+    annot: bool = True,
+    fmt: str = ".2f",
+    figsize: Tuple[int,int] = (10,8),
+    save_path: Optional[str] = None,
+    show: bool = True
+):
+    """
+    folded_df: output of aggregate_mape_by_category (one row per fold obs),
+               it must contain columns ['predictor_category','target_category','mape'].
+    Returns pivoted DataFrame used to plot.
+    """
+    if folded_df.empty:
+        raise ValueError("folded_df is empty - nothing to plot.")
+
+    # Group to predictor_cat x target_cat using chosen aggregator
+    if agg_method == 'mean':
+        agg = folded_df.groupby(['predictor_category','target_category'], as_index=False).mape.mean().rename(columns={'mape':'mape_agg'})
+    elif agg_method == 'median':
+        agg = folded_df.groupby(['predictor_category','target_category'], as_index=False).mape.median().rename(columns={'mape':'mape_agg'})
+    else:
+        raise ValueError("agg_method must be 'mean' or 'median'")
+
+    # pivot to matrix
+    pivot = agg.pivot(index='predictor_category', columns='target_category', values='mape_agg').fillna(np.nan)
+
+    # optional normalization per row
+    plot_mat = pivot.copy()
+    if normalize_rows:
+        row_sums = plot_mat.sum(axis=1)
+        # avoid division by zero
+        plot_mat = plot_mat.div(row_sums.replace(0, np.nan), axis=0)
+
+    plt.figure(figsize=figsize)
+    sns.heatmap(plot_mat, annot=annot, fmt=fmt, cmap=cmap, linewidths=0.5, linecolor='white', square=False)
+    plt.title(f"Aggregated MAPE ({agg_method}) by predictor-category → target-category for horion: {horizon} and lag: {lag}")
+    plt.xlabel("Target category")
+    plt.ylabel("Predictor category")
+    plt.xticks(rotation=45, ha='right')
+    plt.yticks(rotation=0)
+
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, bbox_inches='tight', dpi=150)
+        print(f"Saved heatmap to {save_path}")
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    return pivot
+
+# --- helper bar plot: for a given target_category show predictor_category MAPE ranking ---
+def plot_mape_bar_for_target(
+    folded_df: pd.DataFrame,
+    target_category: str,
+    agg_method: str = 'mean',
+    top_k: Optional[int] = None,
+    figsize: Tuple[int,int] = (8,5),
+    save_path: Optional[str] = None,
+    show: bool = True
+):
+    df = folded_df.copy()
+    df = df[df['target_category'] == target_category]
+    if df.empty:
+        raise ValueError(f"No data for target_category={target_category}")
+
+    if agg_method == 'mean':
+        agg = df.groupby('predictor_category').mape.mean().sort_values()
+    else:
+        agg = df.groupby('predictor_category').mape.median().sort_values()
+
+    if top_k is not None:
+        agg = agg.head(top_k)
+
+    plt.figure(figsize=figsize)
+    ax = agg.plot(kind='barh')
+    ax.set_xlabel("Aggregated MAPE")
+    ax.set_title(f"{agg_method.title()} MAPE by predictor-category → target_category={target_category}")
+    plt.tight_layout()
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        print(f"Saved barplot to {save_path}")
+    if show:
+        plt.show()
+    else:
+        plt.close()
+
+    return agg
+
+
 # main aggregator + plotting function
 def aggregate_feature_importances_by_category(
     products: list[str] = ALL_PRODUCTS,
+    algo_name: str = "",
     models: list[str] | None = None,
     horizons: list[int] | None = None,
     lags_list: list[int] | None = None,
@@ -298,7 +519,7 @@ def aggregate_feature_importances_by_category(
                 continue
             try:
                 # read using provided helper
-                df = _read_feat_importance(normed_predict_col_name, normed_target_col_name)
+                _, feat_importance_df, _, _ = _read_feat_importance(normed_predict_col_name, normed_target_col_name, algo_name)
   
             except Exception as e:
                 missing.append((normed_predict_col_name, normed_target_col_name))
@@ -369,6 +590,7 @@ def aggregate_feature_importances_by_category(
     full = full[full['importance_sum'] > 0.0]
 
     return full
+
 
 def plot_category_heatmap_and_stacked(
     aggregated_df: pd.DataFrame,
@@ -473,3 +695,82 @@ def plot_category_heatmap_and_stacked(
         plt.show()
     else:
         plt.close()
+
+
+### LGB
+
+# add imports at top of file
+from lightgbm import LGBMRegressor
+
+# ---------- LGBM factory (supports DART) ----------
+def build_lgb_regressor(
+    horizon: int,
+    lags: int,
+    random_state: int = 42,
+    boosting: str = "gbdt",   # "gbdt" (default) or "dart"
+) -> LGBMRegressor:
+    """
+    Return an LGBMRegressor with hyperparameters adapted to forecast horizon and lags.
+    - horizon: months to forecast (12, 24, 36 ...)
+    - lags: number of lag features used (int) or dict (per-series)
+    - boosting: "gbdt" (default) or "dart"
+    """
+    # Base params common to both GBDT and DART
+    params = {
+        "n_estimators": 1000,
+        "learning_rate": 0.05,
+        "num_leaves": 15,
+        "max_depth": -1,
+        "min_child_samples": 5,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8,
+        "reg_alpha": 0.0,
+        "reg_lambda": 1.0,
+        "random_state": random_state,
+        "verbose": -1,
+        "n_jobs": 1,
+        "boosting_type": boosting
+    }
+
+    # DART-specific defaults (stochastic dropouts for trees)
+    if boosting == "dart":
+        # DART often benefits from slightly higher learning rate regularization and dropout tuning.
+        params.update({
+            "drop_rate": 0.1,      # fraction of trees to drop at each iteration (0.0..1.0)
+            "skip_drop": 0.5,      # probability of skipping drop during an iteration
+            "max_drop": 50,        # maximum number of dropped trees to keep
+            # "xgboost_dart_mode": False  # available in recent versions; leave default
+        })
+        # DART is more stochastic; often fewer trees are ok, but early stopping recommended.
+        params["n_estimators"] = 800
+        # slightly lower min child samples to allow splits if data is small (tweak per fold)
+        params["min_child_samples"] = max(5, params["min_child_samples"])
+        # increase regularization a bit
+        params["reg_lambda"] = params.get("reg_lambda", 1.0) + 0.5
+
+    # Adjustments by horizon (more regularization, lower LR for long horizons)
+    if horizon > 12:
+        params["n_estimators"] = int(params["n_estimators"] * 0.8)
+        params["learning_rate"] = 0.03
+        params["reg_lambda"] = params.get("reg_lambda", 1.0) + 1.0
+        params["min_child_samples"] = max(25, params["min_child_samples"] + 5)
+    if horizon > 24:
+        params["n_estimators"] = int(params["n_estimators"] * 0.75)
+        params["learning_rate"] = 0.02
+        params["reg_lambda"] = params.get("reg_lambda", 1.0) + 2.0
+        params["min_child_samples"] = max(35, params["min_child_samples"] + 15)
+
+    # Adjustments by lags (more features -> allow slightly more complexity but add reg)
+    if isinstance(lags, int) and lags >= 12:
+        params["num_leaves"] = 63
+        params["reg_lambda"] = params.get("reg_lambda", 1.0) + 0.5
+        params["min_child_samples"] = max(20, params["min_child_samples"])
+
+    # If lags is a dict (per series), take max as heuristic
+    if isinstance(lags, dict):
+        max_l = max(lags.values()) if len(lags) > 0 else 12
+        if max_l >= 12:
+            params["num_leaves"] = 63
+
+    # Return the sklearn wrapper
+    return LGBMRegressor(**params)
