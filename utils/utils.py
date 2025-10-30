@@ -4,11 +4,18 @@ from collections import Counter
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from .constants import CATEGORY_MAP
+from .constants import (
+CATEGORY_MAP,
+CAT_MAP_ENCODING,
+CATEGORY_MAP_CHEMICALS,
+CATEGORY_MAP_CHEMICALS_ENCODING
+)
 from pathlib import Path
 import seaborn as sns
 from typing import Optional, Tuple
 from copy import deepcopy
+from sklearn.metrics import mean_absolute_percentage_error as mape_sklearn
+from .cluster_forecast import ClusterForecaster
 
 
 def compute_mode_and_stats(df_subset: pd.DataFrame):
@@ -774,3 +781,463 @@ def build_lgb_regressor(
 
     # Return the sklearn wrapper
     return LGBMRegressor(**params)
+
+
+## PART 2: Time series predictions
+import matplotlib.pyplot as plt 
+
+
+def normalize_series(s: pd.Series, method: str = "index"):
+    """
+    Normalize a Series. method in {"index", "minmax", "zscore"}.
+    - "index": value / first_non_null_value * 100
+    - "minmax": (value - min) / (max - min)
+    - "zscore": (value - mean) / std
+    """
+    s = s.copy()
+    if method == "index":
+        # use first non-null value as base
+        first = s.dropna().iloc[0] if not s.dropna().empty else None
+        if first is None or first == 0:
+            return s * float("nan")
+        return s / first * 100.0
+    elif method == "minmax":
+        lo = s.min()
+        hi = s.max()
+        if hi == lo:
+            return (s - lo)  # all zeros
+        return (s - lo) / (hi - lo)
+    elif method == "zscore":
+        mu = s.mean()
+        sigma = s.std()
+        if sigma == 0:
+            return s - mu
+        return (s - mu) / sigma
+    else:
+        raise ValueError("Unknown normalization method")
+
+
+def transform_and_plot_trend_for_cat(df_in: pd.DataFrame,
+                       rolling_window_months: int = 12,
+                       require_full_window: bool = True,
+                       norm_method: str = 'index',
+                       features_to_cat: dict[str, str] = CATEGORY_MAP) -> None:
+    df = df_in.copy()
+    fig, ax = plt.subplots(4, 2, figsize=(19,15))
+    cols_to_plot = []
+    df.columns = [col.replace("/", " ") for col in df.columns]
+    # --- Create category sums ---
+    for idx, category in enumerate(set(features_to_cat.values())):
+        # Get all columns belonging to this category that are present in df
+        cols = [col for col, cat in features_to_cat.items() if cat == category and col in df.columns]
+    
+        if cols:  # only if such columns exist in df
+            df[f"{category}_sum_original"] = df[cols].sum(axis=1)
+            # compute rolling sum over specified months
+            minp = rolling_window_months if require_full_window else 1
+            rolling_col_name = f"{category}_{rolling_window_months}m_sum_original"
+            df[rolling_col_name] = df[f"{category}_sum_original"].rolling(window=rolling_window_months,
+                                                             min_periods=minp).sum()
+            norm_monthly = normalize_series(df[f"{category}_sum_original"], method=norm_method)
+            norm_rolling = normalize_series(df[rolling_col_name], method=norm_method)
+            df[f"{category}_sum"] = norm_monthly
+            df[rolling_col_name] = norm_rolling
+            idx_plot_y = idx % 4
+            idx_plot_x = int(idx >= 4)
+            
+            fig.patch.set_facecolor('lightgray')
+            ax[idx_plot_y, idx_plot_x].grid(axis='x', linestyle=':', alpha=0.6)
+            ax[idx_plot_y, idx_plot_x].set_title(f'{category} index stats')
+            ax[idx_plot_y, idx_plot_x].set_facecolor('lightgray')
+            ax[idx_plot_y, idx_plot_x].plot(df.index, norm_monthly, linewidth=2, color="maroon", label=f'{category} sum')
+            ax[idx_plot_y, idx_plot_x].plot(df.index, norm_rolling, linewidth=2, color="steelblue", label=f'roling windw {rolling_window_months} month sum')
+            ax[idx_plot_y, idx_plot_x].legend()
+    
+    plt.show()
+    return df
+
+
+def get_best_result_for_runs(results_path: str) -> dict[str, float]:
+    best_mape_results = {}
+    for item in os.listdir(results_path):
+        if item.endswith("_metrics.csv"):
+            results_df = pd.read_csv(f"{results_path}/{item}")
+            target, predictors = item.replace("_metrics.csv", "").split("_by_")
+            if target not in best_mape_results:
+                best_mape_results[target] = (results_df["MAPE"].values[0], predictors.split("_"))
+            else:
+                curr_best_res = best_mape_results[target][0]
+                if curr_best_res > results_df["MAPE"].values[0]:
+                    best_mape_results[target] = (results_df["MAPE"].values[0], predictors.split("_"))
+    return best_mape_results
+
+
+def plot_graphics_for_each_ts(
+    df_true: pd.DataFrame,
+    df_preds: pd.DataFrame,
+    df_preds_naive: pd.DataFrame,
+    goods_name: str,
+    mape_val: float,
+    mape_val_naive: float,
+    predictor_name: str,
+    save_dir: str,
+    forecasting_horizon: int = 12
+):
+    fig, ax = plt.subplots(figsize=(12,9))
+    fig.patch.set_facecolor('lightgray')
+    ax.set_facecolor('lightgray')
+    ax.plot(df_true.index,
+            df_true,
+            label=f"original {goods_name}",
+            color="black",
+            linestyle='--',
+            marker='o')
+    ax.plot(df_preds.index,
+            df_preds,
+            label=f"preds {goods_name};  with mape: {mape_val*100:.2f}",
+            color="maroon",
+            linestyle='--',
+            marker='o')
+    ax.plot(df_preds.index,
+            df_preds_naive,
+            label=f"preds naive {goods_name};  with mape: {mape_val_naive*100:.2f}",
+            color="darkblue",
+            linestyle='--',
+            marker='o')
+    ax.set_xlabel("Date with month frequenct")
+    ax.set_ylabel("Price")
+    ax.set_title(f"TS for {goods_name} predicted by {predictor_name} with forecasting horizon of {forecasting_horizon} months")
+    ax.legend()
+    plt.savefig(f"{save_dir}/{goods_name}_{predictor_name}_ts_preds.png")
+
+
+def compute_norm_params_for_index(s: pd.Series, upto: Optional[pd.Timestamp] = None) -> dict:
+    """
+    For index normalization (value / first_non_null * 100),
+    compute the 'first' value using only observations <= upto (if given).
+    Returns dict with {'method': 'index', 'first': first_value}
+    """
+    if upto is not None:
+        hist = s.loc[:upto]
+    else:
+        hist = s
+    first_non_null = hist.dropna().iloc[0] if not hist.dropna().empty else None
+    return {"method": "index", "first": float(first_non_null) if first_non_null is not None else None}
+
+def inverse_index_norm(arr: np.ndarray, params: dict) -> np.ndarray:
+    """
+    arr: numpy array of normalized values (same units as your model output)
+    params: dict with 'first'
+    """
+    if params is None or params.get("first") is None:
+        # cannot invert without base value
+        raise ValueError("Normalization params missing 'first' for index method.")
+    return (arr / 100.0) * params["first"]
+
+# ---- helpers to compute weights (no leakage) ----
+
+def compute_last_share_weights(members_df: pd.DataFrame,
+                               train_end: pd.Timestamp,
+                               require_nonzero_sum: bool = True) -> pd.Series:
+    """
+    Compute weights for each member using values at train_end (last observed).
+    members_df: historical (original scale) DataFrame with datetime index.
+    Returns pd.Series indexed by member col with weights summing to 1.
+    """
+    last_vals = members_df.loc[:train_end].iloc[-1]  # last row up to train_end
+    last_vals = last_vals.fillna(0.0)
+    total = last_vals.sum()
+    if total == 0 or pd.isna(total):
+        # fallback: uniform weights
+        n = len(last_vals)
+        if n == 0:
+            return pd.Series(dtype=float)
+        return pd.Series(1.0 / n, index=last_vals.index)
+    return last_vals / total
+
+def compute_smoothed_share_weights(members_df: pd.DataFrame,
+                                   train_end: pd.Timestamp,
+                                   window_months: int = 3) -> pd.Series:
+    """
+    Compute weights as rolling mean of last `window_months` months (history <= train_end),
+    then normalize to sum to 1.
+    """
+    hist = members_df.loc[:train_end]
+    # take last window
+    if len(hist) == 0:
+        return pd.Series(dtype=float)
+    last_window = hist.tail(window_months).fillna(0.0)
+    sums = last_window.mean(axis=0)  # mean across months
+    total = sums.sum()
+    if total == 0 or pd.isna(total):
+        n = len(sums)
+        return pd.Series(1.0 / n, index=sums.index)
+    return sums / total
+
+# ---- main disaggregation function ----
+
+def disaggregate_category_forecast(pred_df: pd.DataFrame,
+                                   pred_naive_df: pd.DataFrame,
+                                   cluster_name: str,
+                                   members_df: pd.DataFrame,
+                                   train_end: pd.Timestamp,
+                                   norm_params: dict,
+                                   predictor_name: str,
+                                   plots_result_dir: str = "disaggregated_ts_results_pairs",
+                                   weight_method: str = "last",
+                                   smooth_window: int = 3,
+                                   ensure_sum_equal: bool = True,
+                                   predict_horizon: int = 12) -> pd.DataFrame:
+    """
+    Disaggregate a Category TimeSeries forecast (pred_ts) into per-product forecasts.
+
+    Returns DataFrame with index = pred_ts time index and columns = members_df.columns (forecasts in original units).
+    Input pred_ts is assumed to be normalized in the same way as norm_params says.
+    - norm_params: {'method': 'index', 'first': base}
+    - weight_method: "last" | "smoothed"
+    """
+    if os.path.isfile(f"{cluster_name}_metrics_results.csv"):
+        pd.read_csv(f"{cluster_name}_metrics_results.csv")
+    members_df_test = members_df[members_df.index >= pred_df.index[0]]
+    # pred_df column name might be like "Grains & Seeds_sum" — use first column
+    pred_col = pred_df.columns[1]
+    pred_vals = pred_df[pred_col].values  # normalized values as numpy
+    pred_naive_vals = pred_naive_df[pred_col].values  # normalized values as numpy
+
+    # inverse normalization (currently supports 'index' method)
+    if norm_params["method"] == "index":
+        pred_original = inverse_index_norm(pred_vals, norm_params)
+        pred_original_naive = inverse_index_norm(pred_naive_vals, norm_params)
+    else:
+        raise NotImplementedError("Only 'index' inverse is implemented in this helper. Extend as needed.")
+    tmp = apk_nona_en_rol[apk_nona_en_rol.index >= train_end]
+    # choose weights (computed only using history up to train_end)
+    if weight_method == "last":
+        weights = compute_last_share_weights(members_df, train_end)
+    elif weight_method == "smoothed":
+        weights = compute_smoothed_share_weights(members_df, train_end, window_months=smooth_window)
+    elif weight_method == "index_relative":
+        tmp = apk_nona_en_rol[apk_nona_en_rol.index > pd.Timestamp("2024-05-01")]["Fish_sum_original"]
+        tmp = tmp.div(tmp.shift(1)).fillna(1)
+        betas = compute_last_share_weights(members_df, train_end)
+        weights = pd.DataFrame({col: tmp * val for col, val in betas.items()})
+    else:
+        raise ValueError("weight_method must be 'last' or 'smoothed'")
+
+    # ensure order of columns matching members_df columns
+    members = list(members_df.columns)
+    members_naive = list(members_df.columns)
+
+    weights_naive = weights.reindex(members_naive).fillna(0.0) if weight_method != "index_relative" else weights
+    weights = weights.reindex(members).fillna(0.0) if weight_method != "index_relative" else weights
+
+    # disaggregate
+    # Build result DataFrame: each row is a forecast period
+    forecast_index = pred_df.index
+    res = pd.DataFrame(index=forecast_index, columns=members, dtype=float)
+    for i, cat_val in enumerate(pred_original):
+        # allocate using same weights for every horizon
+        if weight_method != "index_relative":
+            alloc = cat_val * weights.values
+        else:
+            alloc = cat_val * weights.iloc[i].values
+        # small numerical fix: ensure non-negative
+        alloc = np.clip(alloc, a_min=0.0, a_max=None)
+        if ensure_sum_equal:
+            # renormalize so it sums exactly to cat_val (avoid small rounding error)
+            s = alloc.sum()
+            if s > 0:
+                alloc *= (cat_val / s)
+        if weight_method != "index_relative":
+            res.iloc[i, :] = alloc
+        else:
+            res.iloc[i] = alloc
+            
+
+
+    # disaggregate
+    # Build result DataFrame: each row is a forecast period
+    forecast_index = pred_df.index
+    res_naive = pd.DataFrame(index=forecast_index, columns=members_naive, dtype=float)
+    for i, cat_val in enumerate(pred_original_naive):
+        if weight_method != "index_relative":
+            alloc = cat_val * weights_naive.values
+        else:
+            alloc = cat_val * weights_naive.iloc[i].values
+        # allocate using same weights for every horizon
+        # small numerical fix: ensure non-negative
+        alloc = np.clip(alloc, a_min=0.0, a_max=None)
+        if ensure_sum_equal:
+            # renormalize so it sums exactly to cat_val (avoid small rounding error)
+            s = alloc.sum()
+            if s > 0:
+                alloc *= (cat_val / s)
+        if weight_method != "index_relative":
+            res_naive.iloc[i, :] = alloc
+        else:
+            res_naive.iloc[i] = alloc
+
+
+    metrics_result = {}
+    metrics_result_naive = {}
+    for item in list(members_df_test.columns):
+        metrics_result[item] = mape_sklearn(members_df_test[item], res[f"{item}"])
+        metrics_result_naive[item] = mape_sklearn(members_df_test[item], res_naive[f"{item}"])
+        plot_graphics_for_each_ts(members_df[item],
+                                  res[f"{item}"],
+                                  res_naive[f"{item}"],
+                                  item,
+                                  metrics_result[item],
+                                  metrics_result_naive[item],
+                                  predictor_name,
+                                  plots_result_dir,
+                                  forecasting_horizon=predict_horizon)
+    pd.DataFrame([metrics_result]).to_csv(f"{cluster_name}_metrics_results.csv")
+    pd.DataFrame([metrics_result_naive]).to_csv(f"{cluster_name}_metrics_naive_results.csv")
+    res.columns = [f"{member_col}_preds" for member_col in list(members_df.columns)]
+    res_naive.columns = [f"{member_col}_preds" for member_col in list(members_df.columns)]
+    members_df_test.columns = [f"{member_col.replace("_preds", "")}_true" for member_col in list(members_df_test.columns)]
+    return pd.concat([res_naive, members_df_test], axis=1), pd.DataFrame([metrics_result_naive]), pd.concat([res, members_df_test], axis=1), pd.DataFrame([metrics_result])
+
+
+def extrapolate_results(best_mape_results: dict[str, tuple[float, list[str]]],
+                        best_mape_naive_results: dict[str, tuple[float, list[str]]],
+                        df_original: pd.DataFrame,
+                        darts_preds_path_sum: str,
+                        darts_preds_naive_path_sum: str,
+                        train_end: pd.Timestamp,
+                        output_metrics_resname: str,
+                        predict_hoirzon: int = 12,
+                        ts_to_cats: dict[str, str] = {k: CATEGORY_MAP[k] for k in set(list(CATEGORY_MAP.keys())) - set(['Подсолнечное масло (наливом) не бутилированное, не'])},
+                        output_dir_ts: str = "",
+                        weight_method_apply: str = "last",
+                        output_dir_plots: str = "disaggregated_ts_results_pairs") -> dict[str, tuple[float, float]]:
+    metrics_general = pd.DataFrame()
+    naive_better = {}
+    for target, value in best_mape_results.items():
+        mape_val_naive, predictors_naive = best_mape_naive_results[target]
+        mape_val, predictors = value
+        df_preds_sum = pd.read_csv(f"{darts_preds_path_sum}/{target}_by_{"_".join(predictors)}_preds.csv")
+        df_preds_naive_sum = pd.read_csv(f"{darts_preds_naive_path_sum}/{target}_by_{"_".join(predictors_naive)}_preds.csv")
+        cols = [col for col, cat in ts_to_cats.items() if cat == target and col in df_original.columns]
+        df_preds_sum.index = df_original[df_original.index > train_end].index
+        df_preds_naive_sum.index = df_original[df_original.index > train_end].index
+        df_per_ts_naive, metrics_result_naive, df_per_ts, metrics_result = disaggregate_category_forecast(
+                                       df_preds_sum,
+                                       df_preds_naive_sum,
+                                       target,
+                                       df_original[cols],
+                                       train_end,
+                                        {"method": "index",
+                                         "first": df_original[f"{target}_sum_original"].iloc[0]
+                                        },
+                                       "_".join(predictors),
+                                       output_dir_plots,
+                                       weight_method=weight_method_apply,
+                                       predict_horizon=predict_hoirzon
+                                      )
+        for target_ts, mape_pred in metrics_result.items():
+            mape_pred_naive = metrics_result_naive[target_ts]
+            if mape_pred.iloc[0] > mape_pred_naive.iloc[0]:
+                naive_better[target_ts] = (ts_to_cats[target_ts], mape_pred_naive.iloc[0], mape_pred.iloc[0])
+        metrics_general = pd.concat([metrics_general, metrics_result], axis=1)
+        metrics_general.to_csv(output_metrics_resname)
+        metrics_general_naive = pd.concat([metrics_general, metrics_result_naive], axis=1)
+        metrics_general_naive.to_csv(output_metrics_resname.replace(".csv", "_naive.csv"))
+        df_per_ts.to_csv(f"{output_dir_ts}{target}_disaggregated_ts.csv", index=False)
+        df_per_ts_naive.to_csv(f"{output_dir_ts}{target}_disaggregated_ts_naive.csv", index=False)
+
+    return naive_better
+
+
+def aggregate_metrics_result(
+        df_original: pd.DataFrame,
+        global_df: pd.DataFrame,
+        best_mapes: dict[str, tuple[float, list[str]]],
+        best_mapes_naive: dict[str, tuple[float, list[str]]],
+        category_map: dict[str, str] = CATEGORY_MAP,
+        pred_horizon_apk: int = 36,
+        out_dir_to_save_plots: str = "darts_result_pairs",
+        out_dir_to_save_tables: str = "darts_result_tables_pairs"
+):
+    all_clusters = sorted(set(category_map.values()))
+    for target_cat in all_clusters:
+        forecaster = ClusterForecaster(
+            cluster_data=df_original.dropna(),
+            macro_data=global_df[global_df.index >= df_original.dropna().index[0]],
+            category_map=category_map,
+            freq="M",
+            target_col_suffix="_sum",
+            dir_to_save_plots=out_dir_to_save_plots,
+            dir_to_save_tables=out_dir_to_save_tables
+        )
+        start_backtest = df_original.index[-1] - pd.DateOffset(months=pred_horizon_apk)
+    
+        pred_ts, actual_ts, metrics = forecaster.backtest(
+            target_cluster=target_cat,
+            additional_clusters=list(best_mapes[target_cat][1]),
+            use_macro=True,  # keep True to include macro as past covariates during training
+            past_covariate_lags=12,
+            start_backtest=start_backtest,
+            forecast_horizon=pred_horizon_apk,
+            model_type="NBEATS",
+            n_epochs=200
+        )
+    start_backtest = df_original.index[-1] - pd.DateOffset(months=pred_horizon_apk)
+    naive_better_pair = extrapolate_results(
+                    best_mapes,
+                    best_mapes_naive,
+                    df_original,
+                    f"darts_result_tables_pairs_{pred_horizon_apk}",
+                    f"darts_result_tables_naive_{pred_horizon_apk}",
+                    start_backtest,
+                    "pairs_results.csv",
+                    output_dir_plots=f"disaggregated_ts_results_pairs_{pred_horizon_apk}",
+                    output_dir_ts=f"extrapolation_pair_result_relative_index_{pred_horizon_apk}/",
+                    weight_method_apply="last",
+                    predict_hoirzon=pred_horizon_apk,
+                    ts_to_cats=category_map
+    )
+    nbeats_pred_month = []
+    naive_pred_month = []
+    for key, value in naive_better_pair.items():
+        nbeats_pred_month.append(value[1])
+        naive_pred_month.append(value[2])
+    return naive_better_pair, sum(nbeats_pred_month)/len(nbeats_pred_month), sum(naive_pred_month)/len(naive_pred_month)
+
+
+def plot_best_mape_predictors(
+    df_original: pd.DataFrame,
+    darts_preds_path_sum: str,
+    darts_preds_path_12m_sum: str,
+    best_mape_results_sum_triplets: dict[str, float],
+    best_mape_results_12m_sum_triplets: dict[str, float]
+) -> None:
+    for target, value in best_mape_results_sum_triplets.items():
+        mape_val, predictors = value
+        df_preds_sum = pd.read_csv(f"{darts_preds_path_sum}/{target}_by_{"_".join(predictors)}_preds.csv")
+        df_preds_12m_sum = pd.read_csv(f"{darts_preds_path_12m_sum}/{target}_by_{"_".join(predictors)}_preds.csv")
+        fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(15,12))
+        fig.patch.set_facecolor('lightgray')
+        ax1.set_facecolor('lightgray')
+        ax1.set_title(f"Category sum index of {target} prediction by {"|".join(predictors)} with mape: {mape_val:.2f}")
+        ax1.set_xlabel("Time")
+        ax1.set_ylabel(f"Sum target cateogry index")
+        ax1.plot(df_original.index, df_original[f"{target}_sum"], color="black", label="True labels", linestyle='--', marker='o')
+        
+        ax1.plot(df_original[df_original.index > pd.Timestamp("2024-05-01")].index,
+                 df_preds_sum[f"preds_{target}_sum"], color="maroon", label="Predicted labels", linestyle='--', marker='o')
+        ax1.legend()
+
+        ax2.set_facecolor('lightgray')
+        mape_val_12m, _ = best_mape_results_12m_sum_triplets[target]
+        ax2.set_title(f"Slinding window 12 month sum category index of {target} prediction by {"|".join(predictors)} with mape: {mape_val_12m:.2f}")
+        ax2.set_xlabel("Time")
+        ax2.set_ylabel(f"Slinding window sum category index")
+        ax2.plot(df_original.index, df_original[f"{target}_12m_sum"], color="black", label="True labels", linestyle='--', marker='o')
+        
+        ax2.plot(df_original[df_original.index > pd.Timestamp("2024-05-01")].index,
+                 df_preds_12m_sum[f"preds_{target}_12m_sum"], color="maroon", label="Predicted labels", linestyle='--', marker='o')
+        ax2.legend()
+        
+        plt.savefig(f"{target}_best_preds.png")
