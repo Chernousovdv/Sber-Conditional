@@ -293,6 +293,7 @@ class ClusterForecaster:
         actual_df = actual_ts.to_dataframe().rename(columns={f"{target_cluster}{self.target_col_suffix}":
                                                              f"true_{target_cluster}{self.target_col_suffix}"})
         result_df = pd.concat([actual_df, preds_df], axis=1)
+        os.makedirs(self.dir_to_save_tables, exist_ok=True)
         result_df.to_csv(f"{self.dir_to_save_tables}/{target_cluster}_by_{predictors_label}_preds.csv", index=False)
         pd.DataFrame([metrics]).to_csv(f"{self.dir_to_save_tables}/{target_cluster}_by_{predictors_label}_metrics.csv", index=False)
 

@@ -835,11 +835,11 @@ def transform_and_plot_trend_for_cat(df_in: pd.DataFrame,
             df[f"{category}_sum_original"] = df[cols].sum(axis=1)
             # compute rolling sum over specified months
             minp = rolling_window_months if require_full_window else 1
-            rolling_col_name = f"{category}_{rolling_window_months}m_sum_original"
-            df[rolling_col_name] = df[f"{category}_sum_original"].rolling(window=rolling_window_months,
+            rolling_col_name = f"{category}_{rolling_window_months}m_sum"
+            df[f"{rolling_col_name}_original"] = df[f"{category}_sum_original"].rolling(window=rolling_window_months,
                                                              min_periods=minp).sum()
             norm_monthly = normalize_series(df[f"{category}_sum_original"], method=norm_method)
-            norm_rolling = normalize_series(df[rolling_col_name], method=norm_method)
+            norm_rolling = normalize_series(df[f"{rolling_col_name}_original"], method=norm_method)
             df[f"{category}_sum"] = norm_monthly
             df[rolling_col_name] = norm_rolling
             idx_plot_y = idx % 4
@@ -908,6 +908,7 @@ def plot_graphics_for_each_ts(
     ax.set_ylabel("Price")
     ax.set_title(f"TS for {goods_name} predicted by {predictor_name} with forecasting horizon of {forecasting_horizon} months")
     ax.legend()
+    os.makedirs(save_dir, exist_ok=True)
     plt.savefig(f"{save_dir}/{goods_name}_{predictor_name}_ts_preds.png")
 
 
@@ -1010,14 +1011,14 @@ def disaggregate_category_forecast(pred_df: pd.DataFrame,
         pred_original_naive = inverse_index_norm(pred_naive_vals, norm_params)
     else:
         raise NotImplementedError("Only 'index' inverse is implemented in this helper. Extend as needed.")
-    tmp = apk_nona_en_rol[apk_nona_en_rol.index >= train_end]
+    tmp = members_df[members_df.index >= train_end]
     # choose weights (computed only using history up to train_end)
     if weight_method == "last":
         weights = compute_last_share_weights(members_df, train_end)
     elif weight_method == "smoothed":
         weights = compute_smoothed_share_weights(members_df, train_end, window_months=smooth_window)
     elif weight_method == "index_relative":
-        tmp = apk_nona_en_rol[apk_nona_en_rol.index > pd.Timestamp("2024-05-01")]["Fish_sum_original"]
+        tmp = members_df[members_df.index > pd.Timestamp("2024-05-01")]["Fish_sum_original"]
         tmp = tmp.div(tmp.shift(1)).fillna(1)
         betas = compute_last_share_weights(members_df, train_end)
         weights = pd.DataFrame({col: tmp * val for col, val in betas.items()})
@@ -1144,6 +1145,7 @@ def extrapolate_results(best_mape_results: dict[str, tuple[float, list[str]]],
         metrics_general.to_csv(output_metrics_resname)
         metrics_general_naive = pd.concat([metrics_general, metrics_result_naive], axis=1)
         metrics_general_naive.to_csv(output_metrics_resname.replace(".csv", "_naive.csv"))
+        os.makedirs(output_dir_ts, exist_ok=True)
         df_per_ts.to_csv(f"{output_dir_ts}{target}_disaggregated_ts.csv", index=False)
         df_per_ts_naive.to_csv(f"{output_dir_ts}{target}_disaggregated_ts_naive.csv", index=False)
 
