@@ -821,9 +821,11 @@ def transform_and_plot_trend_for_cat(df_in: pd.DataFrame,
                        rolling_window_months: int = 12,
                        require_full_window: bool = True,
                        norm_method: str = 'index',
-                       features_to_cat: dict[str, str] = CATEGORY_MAP) -> None:
+                       features_to_cat: dict[str, str] = CATEGORY_MAP,
+                       plot_graphics: bool = True) -> None:
     df = df_in.copy()
-    fig, ax = plt.subplots(4, 2, figsize=(19,15))
+    if plot_graphics:
+        fig, ax = plt.subplots(4, 2, figsize=(19,15))
     cols_to_plot = []
     df.columns = [col.replace("/", " ") for col in df.columns]
     # --- Create category sums ---
@@ -844,16 +846,16 @@ def transform_and_plot_trend_for_cat(df_in: pd.DataFrame,
             df[rolling_col_name] = norm_rolling
             idx_plot_y = idx % 4
             idx_plot_x = int(idx >= 4)
-            
-            fig.patch.set_facecolor('lightgray')
-            ax[idx_plot_y, idx_plot_x].grid(axis='x', linestyle=':', alpha=0.6)
-            ax[idx_plot_y, idx_plot_x].set_title(f'{category} index stats')
-            ax[idx_plot_y, idx_plot_x].set_facecolor('lightgray')
-            ax[idx_plot_y, idx_plot_x].plot(df.index, norm_monthly, linewidth=2, color="maroon", label=f'{category} sum')
-            ax[idx_plot_y, idx_plot_x].plot(df.index, norm_rolling, linewidth=2, color="steelblue", label=f'roling windw {rolling_window_months} month sum')
-            ax[idx_plot_y, idx_plot_x].legend()
-    
-    plt.show()
+            if plot_graphics:
+                fig.patch.set_facecolor('lightgray')
+                ax[idx_plot_y, idx_plot_x].grid(axis='x', linestyle=':', alpha=0.6)
+                ax[idx_plot_y, idx_plot_x].set_title(f'{category} index stats')
+                ax[idx_plot_y, idx_plot_x].set_facecolor('lightgray')
+                ax[idx_plot_y, idx_plot_x].plot(df.index, norm_monthly, linewidth=2, color="maroon", label=f'{category} sum')
+                ax[idx_plot_y, idx_plot_x].plot(df.index, norm_rolling, linewidth=2, color="steelblue", label=f'roling windw {rolling_window_months} month sum')
+                ax[idx_plot_y, idx_plot_x].legend()
+    if plot_graphics:
+        plt.show()
     return df
 
 
@@ -1243,3 +1245,56 @@ def plot_best_mape_predictors(
         ax2.legend()
         
         plt.savefig(f"{target}_best_preds.png")
+
+
+def plot_known_feature_value(knwow_series_vals: list[int|float],
+                             known_series_name: str,
+                             index_values: list[Any]):
+    fig, ax = plt.subplots(figsize=(10,8))
+    fig.patch.set_facecolor('lightgray')
+
+    ax.set_title(f"Future values for column: {known_series_name}")
+    ax.set_xlabel("Date")
+    ax.set_ylabel(f"{known_series_name}")
+    ax.plot(index_values, knwow_series_vals, color="maroon")
+    ax.set_facecolor('lightgray')
+    plt.show()
+
+
+def extrapolate_results_to_single_ts(ts_name: str,
+                        df_original: pd.DataFrame,
+                        darts_preds_path_sum: str,
+                        train_end: pd.Timestamp,
+                        output_metrics_resname: str,
+                        predict_hoirzon: int = 12,
+                        ts_to_cats: dict[str, str] = {k: CATEGORY_MAP[k] for k in set(list(CATEGORY_MAP.keys())) - set(['Подсолнечное масло (наливом) не бутилированное, не'])},
+                        output_dir_ts: str = "",
+                        weight_method_apply: str = "last",
+                        output_dir_plots: str = "disaggregated_ts_results_pairs") -> dict[str, tuple[float, float]]:
+    target_cat = CATEGORY_MAP[ts_name]
+    predictors = BEST_PREDICTORS_FOR_INDEX[target_cat]
+    df_preds_sum = pd.read_csv(f"{darts_preds_path_sum}/{target_cat}_by_{"_".join(predictors)}_preds.csv")
+    
+    cols = [col for col, cat in ts_to_cats.items() if cat == target_cat and col in df_original.columns]
+    df_preds_sum.index = df_original[df_original.index > train_end].index
+    _, _, df_per_ts, metrics_result = disaggregate_category_forecast(
+                                   df_preds_sum,
+                                   df_preds_sum,
+                                   target_cat,
+                                   df_original[cols],
+                                   train_end,
+                                    {"method": "index",
+                                     "first": df_original[f"{target_cat}_sum_original"].iloc[0]
+                                    },
+                                   "_".join(predictors),
+                                   output_dir_plots,
+                                   weight_method=weight_method_apply,
+                                   predict_horizon=predict_hoirzon
+                                  )
+
+    metrics_general = pd.DataFrame()
+
+    metrics_general = pd.concat([metrics_general, metrics_result], axis=1)
+    metrics_general.to_csv(output_metrics_resname)
+    os.makedirs(output_dir_ts, exist_ok=True)
+    df_per_ts.to_csv(f"{output_dir_ts}{target_cat}_disaggregated_ts.csv", index=False)

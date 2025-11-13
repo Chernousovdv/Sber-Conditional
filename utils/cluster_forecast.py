@@ -1,6 +1,7 @@
 from darts import TimeSeries
 from darts.models import (
     NBEATSModel,
+    TFTModel,
     NaiveSeasonal,
     NaiveDrift,
     NaiveMean,
@@ -17,6 +18,7 @@ import warnings
 from .constants import CAT_MAP_ENCODING
 import os
 import matplotlib.pyplot as plt
+from pandas import DatetimeIndex
 
 
 def plot_preds_on_curve(preds: pd.DataFrame,
@@ -54,6 +56,7 @@ class ClusterForecaster:
                  target_col_suffix: str = "_sum",
                  dir_to_save_plots: str = "darts_result",
                  dir_to_save_tables: str = "darts_result_tables",
+                 future_macro_col: str = "",
                  features_cat_enc: dict[str, int] = CAT_MAP_ENCODING):
         self.cluster_data = cluster_data
         self.macro_data = macro_data
@@ -66,6 +69,7 @@ class ClusterForecaster:
         self.dir_to_save_plots = dir_to_save_plots
         self.dir_to_save_tables = dir_to_save_tables
         self.features_cat_enc = features_cat_enc
+        self.future_macro_col = future_macro_col
 
     def _aggregate_clusters(self) -> pd.DataFrame:
         df = pd.DataFrame(index=self.cluster_data.index)
@@ -79,7 +83,9 @@ class ClusterForecaster:
     def _prepare_series(self,
                         target_col: str,
                         train_end: pd.Timestamp = None,
-                        covariates: Optional[pd.DataFrame] = None):
+                        covariates: Optional[pd.DataFrame] = None,
+                        future_cov: Optional[pd.DataFrame] = None
+                        ):
         # slice up to train_end
         if train_end is not None:
             mask = self.cluster_data.index <= train_end
@@ -88,12 +94,16 @@ class ClusterForecaster:
         else:
             target_slice = self.cluster_data[f"{target_col}{self.target_col_suffix}"]
             cov_slice = covariates
+            future_cov_slice = future_cov
 
         target_ts = TimeSeries.from_series(target_slice, freq=self.freq)
         cov_ts = None
+        future_cov_ts = None
         if cov_slice is not None:
             cov_ts = TimeSeries.from_dataframe(cov_slice, freq=self.freq)
-        return target_ts, cov_ts
+        if future_cov_slice is not None:
+            future_cov_ts = TimeSeries.from_dataframe(future_cov_slice, freq=self.freq)
+        return target_ts, cov_ts, future_cov_ts
 
     def train(self,
               target_cluster: str,
@@ -102,6 +112,7 @@ class ClusterForecaster:
               past_covariate_lags: int = 12,
               train_end: pd.Timestamp = None,
               model_type: str = "NaiveSeasonal",  # default to a baseline
+              use_future_macro: bool = True,
               **model_kwargs):
         """
         Train model up to train_end (inclusive).
@@ -116,18 +127,27 @@ class ClusterForecaster:
         """
         # build covariates DataFrame (the baseline models below WILL IGNORE covariates)
         cov_df = pd.DataFrame(index=self.cluster_data.index)
+        future_cov_df = pd.DataFrame(index=self.cluster_data.index)
         if use_macro:
             cov_df = pd.concat([cov_df, self.macro_data], axis=1)
         if additional_clusters:
             for add in additional_clusters:
                 col_name = f"{add}_lag1"
                 cov_df[col_name] = self.cluster_data[f"{add}{self.target_col_suffix}"].shift(1)
-
+        if use_macro and use_future_macro and self.future_macro_col:
+            if self.future_macro_col not in self.macro_data.columns:
+                raise ValueError(f"future_macro_col '{self.future_macro_col}' not found in macro_data columns")
+            # only this column will be used as future covariate
+            future_cov_df[self.future_macro_col] = self.macro_data[self.future_macro_col]
         # fill missing values (bfill or ffill as needed)
         cov_df = cov_df.fillna(method="bfill").fillna(method="ffill")
+        future_cov_df = future_cov_df.fillna(method="bfill").fillna(method="ffill")
 
         # convert to Darts time series
-        target_ts, cov_ts = self._prepare_series(target_cluster, train_end, cov_df if not cov_df.empty else None)
+        target_ts, cov_ts, future_cov_ts = self._prepare_series(target_cluster,
+                                                 train_end,
+                                                 cov_df if not cov_df.empty else None,
+                                                 future_cov_df if not future_cov_df.empty else None)
 
         # Choose and build model
         model_type_lower = model_type.lower()
@@ -138,20 +158,29 @@ class ClusterForecaster:
                                 **model_kwargs)
             # NBEATS supports covariates if configured (we pass past_covariates below)
             uses_covariates = True
-
+            uses_future_covariates = False
+        elif model_type_lower == "tftmodel":
+            model = TFTModel(input_chunk_length=past_covariate_lags,
+                            output_chunk_length=12,
+                            **model_kwargs)
+            uses_covariates = True
+            uses_future_covariates = True
         elif model_type_lower == "naiveseasonal":
             # user should provide K (seasonal period), default to 12 for monthly
             K = model_kwargs.pop("K", 12)
             model = NaiveSeasonal(K=K)
             uses_covariates = False
+            uses_future_covariates = False
 
         elif model_type_lower == "naivedrift":
             model = NaiveDrift()
             uses_covariates = False
+            uses_future_covariates = False
 
         elif model_type_lower == "naivemean":
             model = NaiveMean()
             uses_covariates = False
+            uses_future_covariates = False
 
         elif model_type_lower == "naivemovingaverage":
             window = model_kwargs.pop("window", None)
@@ -159,14 +188,17 @@ class ClusterForecaster:
                 raise ValueError("NaiveMovingAverage requires 'window' argument (int).")
             model = NaiveMovingAverage(window=window)
             uses_covariates = False
+            uses_future_covariates = False
 
         elif model_type_lower == "exponentialsmoothing" or model_type_lower == "es":
             model = ExponentialSmoothing()
             uses_covariates = False
+            uses_future_covariates = False
 
         elif model_type_lower == "theta":
             model = Theta()
             uses_covariates = False
+            uses_future_covariates = False
 
         else:
             raise NotImplementedError(f"Model type {model_type} not implemented as baseline option")
@@ -174,10 +206,18 @@ class ClusterForecaster:
         # warn if covariates present but model doesn't use them
         if cov_ts is not None and not uses_covariates:
             warnings.warn(f"Model {model_type} does not support covariates; covariates will be ignored for fitting/prediction.")
-
+        if future_cov_ts is not None and not uses_future_covariates:
+            warnings.warn(f"Model {model_type} does not support future covariates; future covariates will be ignored for fitting/prediction.")
         # fit model
-        if uses_covariates and cov_ts is not None:
-            model.fit(series=target_ts, past_covariates=cov_ts, verbose=True)
+        if uses_covariates and uses_future_covariates and cov_ts is not None:
+            model.fit(series=target_ts,
+                      past_covariates=cov_ts,
+                      future_covariates=future_cov_ts,
+                      verbose=True)
+        elif uses_covariates and not uses_future_covariates and cov_ts is not None:
+            model.fit(series=target_ts,
+                      past_covariates=cov_ts,
+                      verbose=True)
         else:
             # baseline / many statistical models: just fit on series
             model.fit(series=target_ts, verbose=True)
@@ -188,7 +228,11 @@ class ClusterForecaster:
         self._train_cov_ts = cov_ts
         self._train_end = train_end
 
-    def forecast(self, n: int = 12, covariates_future: Optional[pd.DataFrame] = None):
+    def forecast(self,
+                 n: int = 12,
+                 covariates_past: Optional[pd.DataFrame] = None,
+                 covariates_future: Optional[pd.DataFrame] = None,
+                 ):
         """
         Forecast the next n steps beyond training data.
         If covariates_future is provided, it will be ignored by baseline models that do not support covariates.
@@ -199,17 +243,24 @@ class ClusterForecaster:
         # If the trained model supports past_covariates and covariates_future is provided as a DataFrame,
         # the user should convert to TimeSeries and pass it; otherwise, ignore.
         cov_future_ts = None
+        cov_past_ts = None
+        if covariates_past is not None:
+            try:
+                cov_past_ts = TimeSeries.from_dataframe(covariates_past, freq=self.freq)
+            except Exception:
+                cov_past_ts = None
         if covariates_future is not None:
             try:
                 cov_future_ts = TimeSeries.from_dataframe(covariates_future, freq=self.freq)
             except Exception:
                 cov_future_ts = None
-
         # If model has predict signature that accepts past_covariates / future_covariates, Darts will raise if passed incorrectly.
         # We'll attempt to call with covariates only when they were used in training (check attribute)
         try:
             # many baseline models: predict(n)
-            pred = self.model.predict(n=n, past_covariates=cov_future_ts)  # works for models that accept covariates
+            pred = self.model.predict(n=n,
+                                      past_covariates=cov_past_ts,
+                                      future_covariates=cov_future_ts)  # works for models that accept covariates
         except TypeError:
             # fallback: call without covariates
             pred = self.model.predict(n=n)
@@ -256,30 +307,34 @@ class ClusterForecaster:
         future_idx = pd.date_range(start=train_end + pd.DateOffset(months=1),
                                    periods=forecast_horizon,
                                    freq="MS")
-        cov_future = pd.DataFrame(index=future_idx)
+        cov_past = pd.DataFrame(index=future_idx)
         if use_macro:
-            cov_future = pd.concat([cov_future, self.macro_data], axis=1)
+            cov_past = pd.concat([cov_past, self.macro_data], axis=1)
         if additional_clusters:
             for additional_cluster in additional_clusters:
                 all_add = self.cluster_data[f"{additional_cluster}{self.target_col_suffix}"].shift(1)
-                cov_future[f"{additional_cluster}_lag1"] = all_add.reindex(future_idx)
+                cov_past[f"{additional_cluster}_lag1"] = all_add.reindex(future_idx)
 
-        cov_future = cov_future.fillna(method="bfill").fillna(method="ffill")
-
-        # forecast
-        pred_ts = self.forecast(n=forecast_horizon, covariates_future=cov_future)
-
+        cov_past = cov_past.fillna(method="bfill").fillna(method="ffill")
+        pred_ts = self.forecast(n=forecast_horizon, covariates_past=cov_past)
         # actual in that period
         actual = self.cluster_data[f"{target_cluster}{self.target_col_suffix}"].reindex(future_idx)
         actual_ts = TimeSeries.from_series(actual, freq=self.freq)
+        return self.plot_and_return_data_backtest(actual_ts, pred_ts, target_cluster, future_idx, additional_clusters)
 
+    def plot_and_return_data_backtest(self,
+                                      target_ts,
+                                      pred_ts,
+                                      target_cluster: str,
+                                      future_idx: DatetimeIndex,
+                                      additional_clusters: Optional[list[str]] = None):
         # metrics
-        mape_val = mape(actual_ts, pred_ts)
-        mae_val = mae(actual_ts, pred_ts)
-        rmse_val = rmse(actual_ts, pred_ts)
+        mape_val = mape(target_ts, pred_ts)
+        mae_val = mae(target_ts, pred_ts)
+        rmse_val = rmse(target_ts, pred_ts)
         # (your plot function)
         plot_preds_on_curve(pred_ts.to_dataframe(),
-                            actual_ts.to_dataframe(),
+                            target_ts.to_dataframe(),
                             mape_val,
                             additional_clusters,
                             target_cluster,
@@ -290,11 +345,11 @@ class ClusterForecaster:
         predictors_label = "none" if not additional_clusters else "_".join(additional_clusters)
         preds_df = pred_ts.to_dataframe().rename(columns={f"{target_cluster}{self.target_col_suffix}": 
                                                           f"preds_{target_cluster}{self.target_col_suffix}"})
-        actual_df = actual_ts.to_dataframe().rename(columns={f"{target_cluster}{self.target_col_suffix}":
+        actual_df = target_ts.to_dataframe().rename(columns={f"{target_cluster}{self.target_col_suffix}":
                                                              f"true_{target_cluster}{self.target_col_suffix}"})
         result_df = pd.concat([actual_df, preds_df], axis=1)
         os.makedirs(self.dir_to_save_tables, exist_ok=True)
         result_df.to_csv(f"{self.dir_to_save_tables}/{target_cluster}_by_{predictors_label}_preds.csv", index=False)
         pd.DataFrame([metrics]).to_csv(f"{self.dir_to_save_tables}/{target_cluster}_by_{predictors_label}_metrics.csv", index=False)
 
-        return pred_ts, actual_ts, metrics
+        return pred_ts, target_ts, metrics

@@ -49,6 +49,18 @@ CATEGORY_MAP = {
     "Табак": "Stimuli Crops"
 }
 
+## Best predictors gained for each cluster by experiments; could be changed
+BEST_PREDICTORS_FOR_INDEX = {
+    'Fish': ['Oils & Meals', 'Sugar & Flour'],
+    'Grains & Seeds': ['Oils & Meals', 'Processed Meat'],
+    'Livestock & Meat': ['Processed Meat', 'Vegetables'],
+    'Oils & Meals': ['Grains & Seeds', 'Vegetables'],
+    'Processed Meat': ['Oils & Meals', 'Sugar & Flour'],
+    'Stimuli Crops': ['Sugar & Flour', 'Vegetables'],
+    'Sugar & Flour': ['Livestock & Meat', 'Vegetables'],
+    'Vegetables': ['Livestock & Meat', 'Sugar & Flour']
+}
+
 CAT_MAP_ENCODING = {
  'Sugar & Flour': 0,
  'Vegetables': 1,
