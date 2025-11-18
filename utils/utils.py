@@ -8,11 +8,12 @@ from .constants import (
 CATEGORY_MAP,
 CAT_MAP_ENCODING,
 CATEGORY_MAP_CHEMICALS,
-CATEGORY_MAP_CHEMICALS_ENCODING
+CATEGORY_MAP_CHEMICALS_ENCODING,
+BEST_PREDICTORS_FOR_INDEX
 )
 from pathlib import Path
 import seaborn as sns
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 from copy import deepcopy
 from sklearn.metrics import mean_absolute_percentage_error as mape_sklearn
 from .cluster_forecast import ClusterForecaster
@@ -1270,9 +1271,12 @@ def extrapolate_results_to_single_ts(ts_name: str,
                         ts_to_cats: dict[str, str] = {k: CATEGORY_MAP[k] for k in set(list(CATEGORY_MAP.keys())) - set(['Подсолнечное масло (наливом) не бутилированное, не'])},
                         output_dir_ts: str = "",
                         weight_method_apply: str = "last",
-                        output_dir_plots: str = "disaggregated_ts_results_pairs") -> dict[str, tuple[float, float]]:
-    target_cat = CATEGORY_MAP[ts_name]
-    predictors = BEST_PREDICTORS_FOR_INDEX[target_cat]
+                        output_dir_plots: str = "disaggregated_ts_results_pairs",
+                        category_map = CATEGORY_MAP,
+                        best_predictors_for_idx = BEST_PREDICTORS_FOR_INDEX) -> dict[str, tuple[float, float]]:
+    target_cat = category_map[ts_name]
+    predictors = best_predictors_for_idx[target_cat]
+    predictors = predictors if predictors is not None else ["none"]
     df_preds_sum = pd.read_csv(f"{darts_preds_path_sum}/{target_cat}_by_{"_".join(predictors)}_preds.csv")
     
     cols = [col for col, cat in ts_to_cats.items() if cat == target_cat and col in df_original.columns]

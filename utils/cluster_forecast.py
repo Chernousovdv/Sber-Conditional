@@ -91,6 +91,7 @@ class ClusterForecaster:
             mask = self.cluster_data.index <= train_end
             target_slice = self.cluster_data.loc[mask, f"{target_col}{self.target_col_suffix}"]
             cov_slice = covariates.loc[mask, :] if covariates is not None else None
+            future_cov_slice = future_cov
         else:
             target_slice = self.cluster_data[f"{target_col}{self.target_col_suffix}"]
             cov_slice = covariates
@@ -247,12 +248,14 @@ class ClusterForecaster:
         if covariates_past is not None:
             try:
                 cov_past_ts = TimeSeries.from_dataframe(covariates_past, freq=self.freq)
-            except Exception:
+            except Exception as e:
+                print(f"Failed to convert covariates past into TimeSeries with error: {e}; Gonna skip")
                 cov_past_ts = None
         if covariates_future is not None:
             try:
                 cov_future_ts = TimeSeries.from_dataframe(covariates_future, freq=self.freq)
-            except Exception:
+            except Exception as e:
+                print(f"Failed to convert covariates future into TimeSeries with error: {e}; Gonna skip")
                 cov_future_ts = None
         # If model has predict signature that accepts past_covariates / future_covariates, Darts will raise if passed incorrectly.
         # We'll attempt to call with covariates only when they were used in training (check attribute)

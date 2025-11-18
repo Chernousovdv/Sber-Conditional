@@ -60,6 +60,10 @@ BEST_PREDICTORS_FOR_INDEX = {
     'Sugar & Flour': ['Livestock & Meat', 'Vegetables'],
     'Vegetables': ['Livestock & Meat', 'Sugar & Flour']
 }
+BEST_PREDICTORS_FOR_INDEX_CHEMICALS = {
+    'dip': None,
+    'bump': None
+}
 
 CAT_MAP_ENCODING = {
  'Sugar & Flour': 0,
