@@ -17,6 +17,7 @@ from typing import Optional
 import warnings
 from .constants import CAT_MAP_ENCODING
 import os
+import pickle
 import matplotlib.pyplot as plt
 from pandas import DatetimeIndex
 
@@ -65,6 +66,7 @@ class ClusterForecaster:
         self.scaler_target = Scaler()
         self.scaler_cov = Scaler()
         self.model = None
+        self.model_type = "NaiveSeasonal"
         self.target_col_suffix = target_col_suffix
         self.dir_to_save_plots = dir_to_save_plots
         self.dir_to_save_tables = dir_to_save_tables
@@ -86,6 +88,7 @@ class ClusterForecaster:
                         covariates: Optional[pd.DataFrame] = None,
                         future_cov: Optional[pd.DataFrame] = None
                         ):
+        future_cov_slice = None  # <-- ensure defined
         # slice up to train_end
         if train_end is not None:
             mask = self.cluster_data.index <= train_end
@@ -112,12 +115,11 @@ class ClusterForecaster:
               use_macro: bool = True,
               past_covariate_lags: int = 12,
               train_end: pd.Timestamp = None,
-              model_type: str = "NaiveSeasonal",  # default to a baseline
               use_future_macro: bool = True,
               **model_kwargs):
         """
         Train model up to train_end (inclusive).
-        model_type can be one of:
+        self.model_type can be one of:
           - 'NaiveSeasonal' (requires K in model_kwargs; set K=12 for monthly seasonality)
           - 'NaiveDrift'
           - 'NaiveMean'
@@ -151,7 +153,7 @@ class ClusterForecaster:
                                                  future_cov_df if not future_cov_df.empty else None)
 
         # Choose and build model
-        model_type_lower = model_type.lower()
+        model_type_lower = self.model_type.lower()
         if model_type_lower == "nbeats" or model_type_lower == "n-beats":
             # keep your previous NBEATS behaviour
             model = NBEATSModel(input_chunk_length=past_covariate_lags,
@@ -202,13 +204,13 @@ class ClusterForecaster:
             uses_future_covariates = False
 
         else:
-            raise NotImplementedError(f"Model type {model_type} not implemented as baseline option")
+            raise NotImplementedError(f"Model type {self.model_type} not implemented as baseline option")
 
         # warn if covariates present but model doesn't use them
         if cov_ts is not None and not uses_covariates:
-            warnings.warn(f"Model {model_type} does not support covariates; covariates will be ignored for fitting/prediction.")
+            warnings.warn(f"Model {self.model_type} does not support covariates; covariates will be ignored for fitting/prediction.")
         if future_cov_ts is not None and not uses_future_covariates:
-            warnings.warn(f"Model {model_type} does not support future covariates; future covariates will be ignored for fitting/prediction.")
+            warnings.warn(f"Model {self.model_type} does not support future covariates; future covariates will be ignored for fitting/prediction.")
         # fit model
         if uses_covariates and uses_future_covariates and cov_ts is not None:
             model.fit(series=target_ts,
@@ -270,6 +272,74 @@ class ClusterForecaster:
 
         return pred
 
+    def forecast_to_date(
+            self,
+            last_timestamp: pd.Timestamp,
+            target_date: Union[pd.Timestamp, str],
+            covariates_past: Optional[pd.DataFrame] = None,
+            covariates_future: Optional[pd.DataFrame] = None
+    ):
+        """
+        Forecast up to a specific target date using the already trained model.
+        Returns the forecasted value at exactly that date.
+        """
+    
+        if self.model is None:
+            raise RuntimeError("Model not trained yet")
+    
+        target_date = pd.to_datetime(target_date)
+    
+        if target_date <= last_timestamp:
+            raise ValueError("target_date must be after last_timestamp")
+    
+        # -----------------------------
+        # 1. Compute forecast horizon
+        # -----------------------------
+        # Assumes daily freq; if hourly/weekly/etc., you already know how to adapt:
+        step_count = (target_date - last_timestamp).days
+        if step_count <= 0:
+            raise ValueError("Computed non-positive forecast horizon")
+    
+        # -----------------------------
+        # 2. Convert covariates exactly like original forecast()
+        # -----------------------------
+        cov_future_ts = None
+        cov_past_ts = None
+    
+        if covariates_past is not None:
+            try:
+                cov_past_ts = TimeSeries.from_dataframe(covariates_past, freq=self.freq)
+            except Exception as e:
+                print(f"Failed to convert covariates_past: {e}; skipping")
+                cov_past_ts = None
+    
+        if covariates_future is not None:
+            try:
+                cov_future_ts = TimeSeries.from_dataframe(covariates_future, freq=self.freq)
+            except Exception as e:
+                print(f"Failed to convert covariates_future: {e}; skipping")
+                cov_future_ts = None
+    
+        # -----------------------------
+        # 3. Call model.predict() with identical logic to forecast()
+        # -----------------------------
+        try:
+            pred_series = self.model.predict(
+                n=step_count,
+                past_covariates=cov_past_ts,
+                future_covariates=cov_future_ts
+            )
+        except TypeError:
+            # fallback for simple baseline models
+            pred_series = self.model.predict(n=step_count)
+    
+        # -----------------------------
+        # 4. Return only the value at target date
+        # -----------------------------
+        # pred_series is a TimeSeries → last point is the target_date
+        return pred_series[-1]
+
+
     def backtest(self,
                  target_cluster: str,
                  additional_clusters: Optional[list[str]] = None,
@@ -277,7 +347,6 @@ class ClusterForecaster:
                  past_covariate_lags: int = 12,
                  start_backtest: pd.Timestamp = None,
                  forecast_horizon: int = 12,
-                 model_type: str = "NaiveSeasonal",
                  **model_kwargs):
         """
         Do a one-step backtest: train up to start_backtest - 1 month, forecast horizon steps,
@@ -303,7 +372,6 @@ class ClusterForecaster:
                    use_macro=use_macro,
                    past_covariate_lags=past_covariate_lags,
                    train_end=train_end,
-                   model_type=model_type,
                    **model_kwargs)
 
         # Prepare the covariates for the forecast period (may be ignored by baseline models)
@@ -356,3 +424,76 @@ class ClusterForecaster:
         pd.DataFrame([metrics]).to_csv(f"{self.dir_to_save_tables}/{target_cluster}_by_{predictors_label}_metrics.csv", index=False)
 
         return pred_ts, target_ts, metrics
+
+    def save(self, path: str):
+        """
+        Persist the ClusterForecaster + underlying Darts model.
+        Two files are created:
+          path + ".pkl"  -> pickled ClusterForecaster WITHOUT model
+          path + "_model.pth" -> Darts model (Torch-based or baseline)
+        """
+        os.makedirs("/".join(path.split("/")[:-1]), exist_ok=True)
+        if self.model is None:
+            raise ValueError("No model has been trained, nothing to save.")
+        
+        # save darts model separately
+        model_path = path + "_model.pth"
+        self.model.save(model_path)
+
+        # temporarily remove the model so pickle does not break
+        model_backup = self.model
+        self.model = None
+
+        with open(path + ".pkl", "wb") as f:
+            pickle.dump(self, f)
+
+        # restore the model in memory
+        self.model = model_backup
+
+        print(f"Saved forecaster to {path}.pkl and model to {model_path}")
+
+    @classmethod
+    def load(cls, path: str):
+        """
+        Load ClusterForecaster and restore the underlying model
+        based on stored model_type.
+        """
+        model_path = path + "_model.pth"
+
+        # Load forecaster object
+        with open(path + ".pkl", "rb") as f:
+            forecaster = pickle.load(f)
+
+        model_type_lower = forecaster.model_type.lower()
+
+        # Restore appropriate model from disk
+        if model_type_lower in ("nbeats", "n-beats"):
+            forecaster.model = NBEATSModel.load(model_path)
+
+        elif model_type_lower == "tftmodel":
+            forecaster.model = TFTModel.load(model_path)
+
+        elif model_type_lower == "naiveseasonal":
+            forecaster.model = NaiveSeasonal.load(model_path)
+
+        elif model_type_lower == "naivedrift":
+            forecaster.model = NaiveDrift.load(model_path)
+
+        elif model_type_lower == "naivemean":
+            forecaster.model = NaiveMean.load(model_path)
+
+        elif model_type_lower == "naivemovingaverage":
+            forecaster.model = NaiveMovingAverage.load(model_path)
+
+        elif model_type_lower in ("exponentialsmoothing", "es"):
+            forecaster.model = ExponentialSmoothing.load(model_path)
+
+        elif model_type_lower == "theta":
+            forecaster.model = Theta.load(model_path)
+
+        else:
+            raise ValueError(f"Unknown model type for loading: {forecaster.model_type}")
+
+        print(f"[OK] Loaded forecaster ← {path}.pkl")
+        print(f"[OK] Loaded model      ← {model_path}")
+        return forecaster
