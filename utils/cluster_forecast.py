@@ -20,7 +20,8 @@ import os
 import pickle
 import matplotlib.pyplot as plt
 from pandas import DatetimeIndex
-
+from darts.models.forecasting.linear_regression_model import LinearRegressionModel
+from sklearn.linear_model import LinearRegression  # or any sklearn regressor
 
 def plot_preds_on_curve(preds: pd.DataFrame,
                         label: pd.DataFrame,
@@ -31,7 +32,7 @@ def plot_preds_on_curve(preds: pd.DataFrame,
                         feature_to_cat_enc: dict[str, str] = CAT_MAP_ENCODING):
     pred_names = "+".join([str(feature_to_cat_enc[pred_name]) for pred_name in predictor_name]) if isinstance(predictor_name, list) else predictor_name
         
-    fig, ax = plt.subplots(figsize=(12, 8))
+    fig, ax = plt.subplots(figsize=(8, 6))
     fig.patch.set_facecolor('lightgray')
     ax.plot(preds.index, preds, color="maroon", label=f"Sum index of {cat_name} preds")
     ax.plot(label.index, label, color="steelblue", label=f"Sum index of {cat_name} label")
@@ -43,9 +44,10 @@ def plot_preds_on_curve(preds: pd.DataFrame,
     ax.set_xlabel("Date")
     ax.set_ylabel("Sum")
     ax.set_facecolor('lightgray')
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-    plt.savefig(f'{save_dir}/{cat_name}_by_{pred_names}_sum_index_one_year.png')
+    if save_dir:
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+        plt.savefig(f'{save_dir}/{cat_name}_by_{pred_names}_sum_index_one_year.png')
 
     
 class ClusterForecaster:
@@ -58,7 +60,8 @@ class ClusterForecaster:
                  dir_to_save_plots: str = "darts_result",
                  dir_to_save_tables: str = "darts_result_tables",
                  future_macro_col: str = "",
-                 features_cat_enc: dict[str, int] = CAT_MAP_ENCODING):
+                 features_cat_enc: dict[str, int] = CAT_MAP_ENCODING,
+                 model_type: str = "NaiveSeasonal"):
         self.cluster_data = cluster_data
         self.macro_data = macro_data
         self.category_map = category_map
@@ -66,7 +69,7 @@ class ClusterForecaster:
         self.scaler_target = Scaler()
         self.scaler_cov = Scaler()
         self.model = None
-        self.model_type = "NaiveSeasonal"
+        self.model_type = model_type
         self.target_col_suffix = target_col_suffix
         self.dir_to_save_plots = dir_to_save_plots
         self.dir_to_save_tables = dir_to_save_tables
@@ -154,11 +157,27 @@ class ClusterForecaster:
 
         # Choose and build model
         model_type_lower = self.model_type.lower()
-        if model_type_lower == "nbeats" or model_type_lower == "n-beats":
+        if model_type_lower in ("regression", "regressionmodel", "linearregression"):
+            lags = model_kwargs.pop("lags", past_covariate_lags)
+            lags_past_cov = model_kwargs.pop("lags_past_covariates", past_covariate_lags)
+            # for future covariates: tuple (past_lags, future_lags)
+            lags_future_cov = model_kwargs.pop("lags_future_covariates", (1, 6))
+            output_len = model_kwargs.pop("output_chunk_length", 1)
+
+            model = LinearRegressionModel(
+                lags=lags,
+                lags_past_covariates=lags_past_cov,
+                lags_future_covariates=lags_future_cov,
+                output_chunk_length=output_len,
+                **model_kwargs
+            )
+
+            uses_covariates = cov_ts is not None
+            uses_future_covariates = future_cov_ts is not None
+        elif model_type_lower == "nbeats" or model_type_lower == "n-beats":
             # keep your previous NBEATS behaviour
             model = NBEATSModel(input_chunk_length=past_covariate_lags,
-                                output_chunk_length=12,
-                                **model_kwargs)
+                                output_chunk_length=12)
             # NBEATS supports covariates if configured (we pass past_covariates below)
             uses_covariates = True
             uses_future_covariates = False
@@ -271,74 +290,6 @@ class ClusterForecaster:
             pred = self.model.predict(n=n)
 
         return pred
-
-    def forecast_to_date(
-            self,
-            last_timestamp: pd.Timestamp,
-            target_date: Union[pd.Timestamp, str],
-            covariates_past: Optional[pd.DataFrame] = None,
-            covariates_future: Optional[pd.DataFrame] = None
-    ):
-        """
-        Forecast up to a specific target date using the already trained model.
-        Returns the forecasted value at exactly that date.
-        """
-    
-        if self.model is None:
-            raise RuntimeError("Model not trained yet")
-    
-        target_date = pd.to_datetime(target_date)
-    
-        if target_date <= last_timestamp:
-            raise ValueError("target_date must be after last_timestamp")
-    
-        # -----------------------------
-        # 1. Compute forecast horizon
-        # -----------------------------
-        # Assumes daily freq; if hourly/weekly/etc., you already know how to adapt:
-        step_count = (target_date - last_timestamp).days
-        if step_count <= 0:
-            raise ValueError("Computed non-positive forecast horizon")
-    
-        # -----------------------------
-        # 2. Convert covariates exactly like original forecast()
-        # -----------------------------
-        cov_future_ts = None
-        cov_past_ts = None
-    
-        if covariates_past is not None:
-            try:
-                cov_past_ts = TimeSeries.from_dataframe(covariates_past, freq=self.freq)
-            except Exception as e:
-                print(f"Failed to convert covariates_past: {e}; skipping")
-                cov_past_ts = None
-    
-        if covariates_future is not None:
-            try:
-                cov_future_ts = TimeSeries.from_dataframe(covariates_future, freq=self.freq)
-            except Exception as e:
-                print(f"Failed to convert covariates_future: {e}; skipping")
-                cov_future_ts = None
-    
-        # -----------------------------
-        # 3. Call model.predict() with identical logic to forecast()
-        # -----------------------------
-        try:
-            pred_series = self.model.predict(
-                n=step_count,
-                past_covariates=cov_past_ts,
-                future_covariates=cov_future_ts
-            )
-        except TypeError:
-            # fallback for simple baseline models
-            pred_series = self.model.predict(n=step_count)
-    
-        # -----------------------------
-        # 4. Return only the value at target date
-        # -----------------------------
-        # pred_series is a TimeSeries → last point is the target_date
-        return pred_series[-1]
-
 
     def backtest(self,
                  target_cluster: str,
@@ -467,7 +418,10 @@ class ClusterForecaster:
         model_type_lower = forecaster.model_type.lower()
 
         # Restore appropriate model from disk
-        if model_type_lower in ("nbeats", "n-beats"):
+        if model_type_lower in ("regression", "regressionmodel", "linearregression"):
+            forecaster.model = LinearRegressionModel.load(model_path)
+
+        elif model_type_lower in ("nbeats", "n-beats"):
             forecaster.model = NBEATSModel.load(model_path)
 
         elif model_type_lower == "tftmodel":

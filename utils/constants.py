@@ -46,7 +46,22 @@ CATEGORY_MAP = {
     "Какао-бобы (USD)": "Stimuli Crops",
     "Какао-бобы": "Stimuli Crops",
     "Табак (USD)": "Stimuli Crops",
-    "Табак": "Stimuli Crops"
+    "Табак": "Stimuli Crops",
+
+    # Chemicals
+    # dip
+    "Карбамид (FOB Южный)": "dip",
+    "Моноаммонийфосфат, MAP (FOB Балтика)": "dip",
+    "Апатитовый концетрат (FOB Morocco)": "dip",
+    "Аммиак (FOB Черное море)": "dip",
+    "Аммиачная селитра (FOB Черное море)": "dip",
+    "Хлорид калия (CFR Ю-В Азия)": "dip",
+
+    # bump
+    "Капролактам импортный контракт (Тайвань и Ю. Корея) CFR Азия": "bump",
+    "Метанол": "bump",
+    "Бензол, CFR Япония": "bump",
+    "Этилен, CFR Китай": "bump"   
 }
 
 ## Best predictors gained for each cluster by experiments; could be changed
@@ -58,7 +73,9 @@ BEST_PREDICTORS_FOR_INDEX = {
     'Processed Meat': ['Oils & Meals', 'Sugar & Flour'],
     'Stimuli Crops': ['Sugar & Flour', 'Vegetables'],
     'Sugar & Flour': ['Livestock & Meat', 'Vegetables'],
-    'Vegetables': ['Livestock & Meat', 'Sugar & Flour']
+    'Vegetables': ['Livestock & Meat', 'Sugar & Flour'],
+    'dip': None,
+    'bump': None
 }
 BEST_PREDICTORS_FOR_INDEX_CHEMICALS = {
     'dip': None,

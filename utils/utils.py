@@ -17,6 +17,7 @@ from typing import Optional, Tuple, Any
 from copy import deepcopy
 from sklearn.metrics import mean_absolute_percentage_error as mape_sklearn
 from .cluster_forecast import ClusterForecaster
+from datetime import datetime, timedelta
 
 
 def compute_mode_and_stats(df_subset: pd.DataFrame):
@@ -884,9 +885,11 @@ def plot_graphics_for_each_ts(
     mape_val_naive: float,
     predictor_name: str,
     save_dir: str,
-    forecasting_horizon: int = 12
+    forecasting_horizon: int = 12,
+    is_backtest: bool = True,
+    up_to_date: str = ""
 ):
-    fig, ax = plt.subplots(figsize=(12,9))
+    fig, ax = plt.subplots(figsize=(8,6))
     fig.patch.set_facecolor('lightgray')
     ax.set_facecolor('lightgray')
     ax.plot(df_true.index,
@@ -901,18 +904,24 @@ def plot_graphics_for_each_ts(
             color="maroon",
             linestyle='--',
             marker='o')
-    ax.plot(df_preds.index,
-            df_preds_naive,
-            label=f"preds naive {goods_name};  with mape: {mape_val_naive*100:.2f}",
-            color="darkblue",
-            linestyle='--',
-            marker='o')
+    if df_preds_naive:
+        ax.plot(df_preds.index,
+                df_preds_naive,
+                label=f"preds naive {goods_name};  with mape: {mape_val_naive*100:.2f}",
+                color="darkblue",
+                linestyle='--',
+                marker='o')
     ax.set_xlabel("Date with month frequenct")
     ax.set_ylabel("Price")
-    ax.set_title(f"TS for {goods_name} predicted by {predictor_name} with forecasting horizon of {forecasting_horizon} months")
+    if is_backtest:
+        ax.set_title(f"TS for {goods_name} predicted by {predictor_name} with forecasting horizon of {forecasting_horizon} months")
+    else:
+        ax.set_title(f"TS for {goods_name} predicted by {predictor_name} up to date {up_to_date}")
+    
     ax.legend()
-    os.makedirs(save_dir, exist_ok=True)
-    plt.savefig(f"{save_dir}/{goods_name}_{predictor_name}_ts_preds.png")
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
+        plt.savefig(f"{save_dir}/{goods_name}_{predictor_name}_ts_preds.png")
 
 
 def compute_norm_params_for_index(s: pd.Series, upto: Optional[pd.Timestamp] = None) -> dict:
@@ -991,7 +1000,9 @@ def disaggregate_category_forecast(pred_df: pd.DataFrame,
                                    weight_method: str = "last",
                                    smooth_window: int = 3,
                                    ensure_sum_equal: bool = True,
-                                   predict_horizon: int = 12) -> pd.DataFrame:
+                                   predict_horizon: int = 12,
+                                   plot_graph: bool = True,
+                                   is_backtest: bool = True) -> pd.DataFrame:
     """
     Disaggregate a Category TimeSeries forecast (pred_ts) into per-product forecasts.
 
@@ -1002,12 +1013,13 @@ def disaggregate_category_forecast(pred_df: pd.DataFrame,
     """
     if os.path.isfile(f"{cluster_name}_metrics_results.csv"):
         pd.read_csv(f"{cluster_name}_metrics_results.csv")
-    members_df_test = members_df[members_df.index >= pred_df.index[0]]
-    # pred_df column name might be like "Grains & Seeds_sum" — use first column
-    pred_col = pred_df.columns[1]
+    if is_backtest:
+        members_df_test = members_df[members_df.index >= pred_df.index[0]]
+        # pred_df column name might be like "Grains & Seeds_sum" — use first column
+    pred_col = pred_df.columns[1] if is_backtest else pred_df.columns[0]
     pred_vals = pred_df[pred_col].values  # normalized values as numpy
     pred_naive_vals = pred_naive_df[pred_col].values  # normalized values as numpy
-
+    
     # inverse normalization (currently supports 'index' method)
     if norm_params["method"] == "index":
         pred_original = inverse_index_norm(pred_vals, norm_params)
@@ -1084,24 +1096,29 @@ def disaggregate_category_forecast(pred_df: pd.DataFrame,
 
     metrics_result = {}
     metrics_result_naive = {}
-    for item in list(members_df_test.columns):
-        metrics_result[item] = mape_sklearn(members_df_test[item], res[f"{item}"])
-        metrics_result_naive[item] = mape_sklearn(members_df_test[item], res_naive[f"{item}"])
-        plot_graphics_for_each_ts(members_df[item],
-                                  res[f"{item}"],
-                                  res_naive[f"{item}"],
-                                  item,
-                                  metrics_result[item],
-                                  metrics_result_naive[item],
-                                  predictor_name,
-                                  plots_result_dir,
-                                  forecasting_horizon=predict_horizon)
+    if is_backtest:
+        for item in list(members_df_test.columns):
+            metrics_result[item] = mape_sklearn(members_df_test[item], res[f"{item}"])
+            metrics_result_naive[item] = mape_sklearn(members_df_test[item], res_naive[f"{item}"])
+            if plot_graph:
+                plot_graphics_for_each_ts(members_df[item],
+                                          res[f"{item}"],
+                                          res_naive[f"{item}"],
+                                          item,
+                                          metrics_result[item],
+                                          metrics_result_naive[item],
+                                          predictor_name,
+                                          plots_result_dir,
+                                          forecasting_horizon=predict_horizon)
     pd.DataFrame([metrics_result]).to_csv(f"{cluster_name}_metrics_results.csv")
     pd.DataFrame([metrics_result_naive]).to_csv(f"{cluster_name}_metrics_naive_results.csv")
     res.columns = [f"{member_col}_preds" for member_col in list(members_df.columns)]
     res_naive.columns = [f"{member_col}_preds" for member_col in list(members_df.columns)]
-    members_df_test.columns = [f"{member_col.replace("_preds", "")}_true" for member_col in list(members_df_test.columns)]
-    return pd.concat([res_naive, members_df_test], axis=1), pd.DataFrame([metrics_result_naive]), pd.concat([res, members_df_test], axis=1), pd.DataFrame([metrics_result])
+    if is_backtest:
+        members_df_test.columns = [f"{member_col.replace("_preds", "")}_true" for member_col in list(members_df_test.columns)]
+        return pd.concat([res_naive, members_df_test], axis=1), pd.DataFrame([metrics_result_naive]), pd.concat([res, members_df_test], axis=1), pd.DataFrame([metrics_result])
+    else:
+        return res_naive, pd.DataFrame([metrics_result_naive]), res, pd.DataFrame([metrics_result])
 
 
 def extrapolate_results(best_mape_results: dict[str, tuple[float, list[str]]],
@@ -1302,3 +1319,32 @@ def extrapolate_results_to_single_ts(ts_name: str,
     metrics_general.to_csv(output_metrics_resname)
     os.makedirs(output_dir_ts, exist_ok=True)
     df_per_ts.to_csv(f"{output_dir_ts}{target_cat}_disaggregated_ts.csv", index=False)
+
+
+def get_month_beginnings(date_str):
+    """
+    Convert a date string into beginning of month strings.
+    
+    Args:
+        date_str (str): Date in "YYYY-MM-DD" format
+        
+    Returns:
+        list: List containing beginning of month string(s)
+    """
+    # Parse the input date
+    input_date = datetime.strptime(date_str, "%Y-%m-%d")
+    
+    # Get the beginning of the current month
+    current_month_start = input_date.replace(day=1)
+    
+    # If input is already the first day of month, return just that date
+    if input_date.day == 1:
+        return [current_month_start.strftime("%Y-%m-%d")]
+    
+    # Otherwise, return current month start and next month start
+    next_month_start = (current_month_start + timedelta(days=32)).replace(day=1)
+    
+    return [
+        current_month_start.strftime("%Y-%m-%d"),
+        next_month_start.strftime("%Y-%m-%d")
+    ]
