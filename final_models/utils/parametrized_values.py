@@ -12,9 +12,11 @@ from utils.utils import (
     get_month_beginnings
 )
 from utils.TS_normalizations import transform_categories
-from utils.data_prepocessing import _ensure_monthly_index_and_align_exog, plot_forecaster_feature_importance
+from utils.data_prepocessing import _ensure_monthly_index_and_align_exog
 from utils.cluster_forecast import ClusterForecaster
 import os
+import numpy as np
+
 
 BASE_DIR = os.path.dirname(os.path.dirname(__file__))   # go up from utils/ to project root
 DATA_DIR = os.path.join(BASE_DIR, "Data")
@@ -104,12 +106,17 @@ DATE_LIST[-1] = pd.to_datetime(SINGLE_DATAPOINT_TO_PRED)
 
 
 ## Parameters with known future values
-FUTURE_FORECASTER_TS_NAME = "Подсолнечник"
-FUTURE_FORECASTER_TS_VALUES = [22.1, 24.9, 18.6, 29.4, 23.1, 23.3]*(int(TOTAL_RANGE/6))
-if not FUTURE_FORECASTER_TS_VALUES:
-    for _ in range(PREDICTION_HORIZON):
-        tmp = input()
-        FUTURE_FORECASTER_TS_VALUES.append(float(tmp))
+FUTURE_FORECASTER_TS_NAME = ["Подсолнечник", "Ключевая ставка, годовых"]
+FUTURE_FORECASTER_TS_VALUES_RAW = [22.1, 17.1]
+FUTURE_FORECASTER_TS_VALUES = []
+for idx in range(len(FUTURE_FORECASTER_TS_NAME)):
+    pred_ts_name = FUTURE_FORECASTER_TS_NAME[idx]
+    df_to_get = df_combined if pred_ts_name in df_combined.columns else macro_data
+    FUTURE_FORECASTER_TS_VALUES.append(
+        np.linspace(df_to_get[pred_ts_name][-1],
+                    FUTURE_FORECASTER_TS_VALUES_RAW[idx],
+                    TOTAL_RANGE)
+    )
 
 MODEL_SAVE_PATH = "{model_name}_dataset/{model_name}_for_{category_name}"
 
@@ -131,8 +138,8 @@ def form_input_to_forecasting(df: pd.DataFrame,
                               macro_data: pd.DataFrame,
                               predictors_lst: list[str],
                               target_col_suffix: str,
-                              future_forecaster_ts_name: str,
-                              future_forecaster_ts_values,
+                              future_forecaster_ts_names: list[str],
+                              future_forecaster_ts_values: list[list[Any]],
                               past_idx,
                               future_idx,
                               use_future_macro
@@ -146,29 +153,27 @@ def form_input_to_forecasting(df: pd.DataFrame,
 
     cov_past = cov_past.fillna(method="bfill").fillna(method="ffill")
     if use_future_macro:
-        if future_forecaster_ts_name in macro_data.columns:
-            future_series_values = macro_data[future_forecaster_ts_name]
-        elif future_forecaster_ts_name in df.columns:
-            future_series_values = df[future_forecaster_ts_name]
-        else:
-            raise ValueError(f"future_forecaster_ts_name '{future_forecaster_ts_name}' not found in macro_data or df columns")
-        if IS_BACKTEST:
-            if USE_FUTURE_COV:
-                # cov_future = future_series_values.loc[:future_idx[-1] + pd.DateOffset(months=1)]
-                cov_future = pd.concat([pd.DataFrame(future_series_values[past_idx]),
-                   pd.DataFrame(future_series_values[future_idx])])
+        cov_future_values = []
+        for future_forecaster_ts_name, future_forecaster_single_ts_values in zip(future_forecaster_ts_names, future_forecaster_ts_values):
+            if future_forecaster_ts_name in macro_data.columns:
+                future_series_values = macro_data[future_forecaster_ts_name]
+            elif future_forecaster_ts_name in df.columns:
+                future_series_values = df[future_forecaster_ts_name]
             else:
-                cov_future = pd.DataFrame(future_series_values[past_idx])
-        else:
-            if USE_FUTURE_COV:
-                # cov_future = future_series_values.loc[:future_idx[-1] + pd.DateOffset(months=1)]
-                cov_future = pd.concat([pd.DataFrame(future_series_values[past_idx]),
-                                        pd.DataFrame(future_forecaster_ts_values,
-                                                   index=future_idx,
-                                                   columns=[future_forecaster_ts_name])]
-                                      )
+                raise ValueError(f"future_forecaster_ts_name '{future_forecaster_ts_name}' not found in macro_data or df columns")
+            if IS_BACKTEST:
+                cov_future_values.append(pd.DataFrame(future_series_values[past_idx]))
+                cov_future_values.append(pd.DataFrame(future_series_values[future_idx]))
+
             else:
-                cov_future = pd.DataFrame(future_series_values[past_idx])
+                cov_future_values.append(pd.DataFrame(future_series_values[past_idx]))
+                cov_future_values.append(pd.DataFrame(future_forecaster_single_ts_values,
+                                                       index=future_idx,
+                                                       columns=[future_forecaster_ts_name])
+                                         )
+                
+        cov_future = pd.concat(cov_future_values)
+        cov_future = cov_future.groupby(cov_future.index).first()
     else:
         cov_future = None
 
@@ -182,8 +187,8 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
                              category_map: dict = CATEGORY_MAP,
                              best_predictors_for_idx: dict = BEST_PREDICTORS_FOR_INDEX,
                              target_col_suffix:str = TARGET_COL_SUFFIX,
-                             future_forecaster_ts_name:str = FUTURE_FORECASTER_TS_NAME,
-                             future_forecaster_ts_values: str = FUTURE_FORECASTER_TS_VALUES,
+                             future_forecaster_ts_name: list[str] = FUTURE_FORECASTER_TS_NAME,
+                             future_forecaster_ts_values: list[list[Any]] = FUTURE_FORECASTER_TS_VALUES,
                              model_name: str = MODEL_NAME_FOR_FORECASTER,
                              use_future_macro: bool = USE_FUTURE_COV,
                              prediction_horizon: int = PREDICTION_HORIZON,
@@ -246,7 +251,9 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
                                                           past_idx,
                                                           future_idx,
                                                           use_future_macro)
-   
+        print("@"*100)
+        print(cov_future if use_future_macro else None)
+        print("@"*100)
         preds = forecaster.forecast(prediction_horizon,
                             cov_past,
                             cov_future if use_future_macro else None)

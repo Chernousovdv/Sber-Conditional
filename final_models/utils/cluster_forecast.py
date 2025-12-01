@@ -103,7 +103,7 @@ class ClusterForecaster:
                  target_col_suffix: str = "_sum",
                  dir_to_save_plots: str = "darts_result",
                  dir_to_save_tables: str = "darts_result_tables",
-                 future_macro_col: str = "",
+                 future_macro_col: list[str] = [],
                  features_cat_enc: dict[str, int] = CAT_MAP_ENCODING,
                  model_type: str = "NaiveSeasonal"):
         self.cluster_data = cluster_data
@@ -187,12 +187,13 @@ class ClusterForecaster:
         # cov_df[f"{target_cluster}_lag1"] = self.cluster_data[f"{target_cluster}{self.target_col_suffix}"].shift(1)
 
         if use_macro and use_future_macro and self.future_macro_col:
-            if self.future_macro_col in self.macro_data.columns:
-                future_cov_df[self.future_macro_col] = self.macro_data[self.future_macro_col]
-            elif self.future_macro_col in self.cluster_data.columns:
-                future_cov_df[self.future_macro_col] = self.cluster_data[self.future_macro_col]
-            else:
-                raise ValueError(f"future_macro_col '{self.future_macro_col}' not found in macro_data or cluster_data columns")
+            for future_col in self.future_macro_col:
+                if future_col in self.macro_data.columns:
+                    future_cov_df[future_col] = self.macro_data[future_col]
+                elif future_col in self.cluster_data.columns:
+                    future_cov_df[future_col] = self.cluster_data[future_col]
+                else:
+                    raise ValueError(f"future_macro_col '{self.future_macro_col}' not found in macro_data or cluster_data columns")
         # fill missing values (bfill or ffill as needed)
         #print(cov_df)
         #raise ValueError("debugging")
@@ -296,10 +297,11 @@ class ClusterForecaster:
                 cov_past_ts = None
         if covariates_future is not None:
             try:
-                cov_future_ts = TimeSeries.from_dataframe(covariates_future, freq=self.freq)
+                cov_future_ts = TimeSeries.from_dataframe(covariates_future)
             except Exception as e:
                 try:
-                    cov_future_ts = TimeSeries.from_series(covariates_future, freq=self.freq)
+                    print(f"Failed to convert covariates future into TimeSeries with error: {e}; Try conver into ts from series")
+                    cov_future_ts = TimeSeries.from_series(covariates_future)
                 except Exception as e:
                     print(f"Failed to convert covariates future into TimeSeries with error: {e}; Gonna skip")
                     cov_future_ts = None
@@ -307,6 +309,9 @@ class ClusterForecaster:
         # We'll attempt to call with covariates only when they were used in training (check attribute)
         try:
             # many baseline models: predict(n)
+            print("!"*100)
+            cov_future_ts
+            print("!"*100)
             pred = self.model.predict(n=n,
                                       series=self._trained_ts,
                                       past_covariates=cov_past_ts,
