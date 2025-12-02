@@ -27,7 +27,6 @@ formed = {}
 
 for i, entry in enumerate(os.scandir(directory)):  
     if entry.is_file() and entry.name.endswith('.xlsx'):  # check if it's a file
-        # print(entry.name)
         d[entry.name] = pd.read_excel(f"{directory}{entry.name}")
     elif entry.is_file() and entry.name.endswith('.csv'):
         formed[entry.name] = pd.read_csv(f"{directory}{entry.name}")
@@ -65,69 +64,47 @@ macro_data = global_macros_en[global_macros_en.index >= apk_nona_en_rol.dropna()
 df_combined = pd.concat([apk_nona_en_rol.dropna(), chemicals_nona_en_rol.dropna()], axis=1)
 
 
-PREDICTION_HORIZON = 12
-PREDICTOR_LAG = 12
+def form_df_future(extended_index,
+                   future_forecaster_ts_names: list[str],
+                   future_forecaster_ts_values_raw: list[Any],
+                   prediction_horizon: int,
+                   df_combined: pd.DataFrame = df_combined,
+                   macro_data: pd.DataFrame = macro_data):
+    # Create a new DataFrame with the extended dates
+    df_extended = pd.DataFrame(index=extended_index, columns=df_combined.columns)
+    macro_extended = pd.DataFrame(index=extended_index, columns=macro_data.columns)
 
-IS_BACKTEST: bool = False
-
-SINGLE_DATAPOINT_TO_PRED = "2026-04-14"
-
-
-TARGET_COL_SUFFIX = "_sum"
-MODEL_NAME_FOR_FORECASTER: Literal["tftmodel", "regression", "nbeats", "naiveseasonal", "naivedrift", "naivemean", "naivemovingaverage"] = "tftmodel"
-USE_FUTURE_COV = MODEL_NAME_FOR_FORECASTER in ("tftmodel", "regression")
-TS_TO_PREDICT = "Соя"
-
-FUTURE_DATE = apk_nona_en_rol.index[-1] - pd.DateOffset(months=PREDICTION_HORIZON)
-BACKTEST_DATE = apk_nona_en_rol.index[-1] - pd.DateOffset(months=PREDICTION_HORIZON*2)
-
-train_end = BACKTEST_DATE
-past_idx = pd.date_range(start=train_end + pd.DateOffset(months=1),
-                           periods=PREDICTION_HORIZON,
-                           freq="MS")
-future_idx = pd.date_range(start=past_idx[-1] + pd.DateOffset(months=1),
-                           periods=PREDICTION_HORIZON,
-                           freq="MS")
-
-dates = get_month_beginnings(SINGLE_DATAPOINT_TO_PRED)
-date_to_pred = dates[1] if len(dates) > 1 else dates[0]
-predict_end = pd.to_datetime(date_to_pred)
-last_date = df_combined.reset_index()["Date"].iloc[-1]
-
-TOTAL_RANGE = (predict_end.year - last_date.year)*12 + (predict_end.month - last_date.month)
-
-start_date = pd.to_datetime(SINGLE_DATAPOINT_TO_PRED) - relativedelta(months=TOTAL_RANGE)
-end_date = pd.to_datetime(SINGLE_DATAPOINT_TO_PRED)
-
-# Generate the list of monthly dates
-DATE_LIST = pd.date_range(start=start_date + pd.DateOffset(months=1),
-                          end=end_date + pd.DateOffset(months=1),
-                          freq='MS').tolist()  # MS = Month Start
-
-DATE_LIST[-1] = pd.to_datetime(SINGLE_DATAPOINT_TO_PRED)
+    # Combine the original and extended DataFrames
+    df_updated = pd.concat([df_combined, df_extended])
+    macro_updated = pd.concat([macro_data, macro_extended])
+    future_forecaster_ts_values = []
+    for idx, col_name in enumerate(future_forecaster_ts_names):
+        if col_name in df_updated.columns:
+            # Get the future values for this column
+            future_value = future_forecaster_ts_values_raw[idx]
+            future_values = np.linspace(df_combined[col_name][-1],
+                            future_value,
+                            prediction_horizon)
+            future_forecaster_ts_values.append(future_values)
+            # Update the values for the extended period
+            # Make sure the length matches
+            if len(future_values) == prediction_horizon:
+                df_updated.loc[extended_index, col_name] = future_values
+    
+        elif col_name in macro_updated.columns:
+            # Get the future values for this column
+            future_value = future_forecaster_ts_values_raw[idx]
+            future_values = np.linspace(macro_data[col_name][-1],
+                            future_value,
+                            prediction_horizon)
+            future_forecaster_ts_values.append(future_values)
+            if len(future_values) == prediction_horizon:
+                macro_updated.loc[extended_index, col_name] = future_values
+    return df_updated, macro_updated, future_forecaster_ts_values
 
 
-## Parameters with known future values
-FUTURE_FORECASTER_TS_NAME = ["Подсолнечник", "Ключевая ставка, годовых"]
-FUTURE_FORECASTER_TS_VALUES_RAW = [22.1, 17.1]
-FUTURE_FORECASTER_TS_VALUES = []
-for idx in range(len(FUTURE_FORECASTER_TS_NAME)):
-    pred_ts_name = FUTURE_FORECASTER_TS_NAME[idx]
-    df_to_get = df_combined if pred_ts_name in df_combined.columns else macro_data
-    FUTURE_FORECASTER_TS_VALUES.append(
-        np.linspace(df_to_get[pred_ts_name][-1],
-                    FUTURE_FORECASTER_TS_VALUES_RAW[idx],
-                    TOTAL_RANGE)
-    )
-
-MODEL_SAVE_PATH = "{model_name}_dataset/{model_name}_for_{category_name}"
-
-PERSIST_MODEL = True
-REFIT_MODEL = False
-
-
-def load_models(model_name: str = MODEL_NAME_FOR_FORECASTER,
-                model_save_path: str = MODEL_SAVE_PATH,
+def load_models(model_name: str,
+                model_save_path: str,
                 category_map: dict[str, str] = CATEGORY_MAP):
     f_dicts = {}
     for target_cat in set(category_map.values()):
@@ -136,17 +113,19 @@ def load_models(model_name: str = MODEL_NAME_FOR_FORECASTER,
 
     return f_dicts
 
+
 def form_input_to_forecasting(df: pd.DataFrame,
                               macro_data: pd.DataFrame,
                               predictors_lst: list[str],
                               target_col_suffix: str,
-                              future_forecaster_ts_names: list[str],
+                              future_forecaster_ts_name: list[str],
                               future_forecaster_ts_values: list[list[Any]],
                               past_idx,
                               future_idx,
                               use_future_macro,
-                              is_backtest: bool
-                              ):
+                              is_backtest: bool,
+                              model_type: str,
+                              input_chunk_length: int = 12): 
     cov_past = pd.DataFrame(index=past_idx)
     cov_past = pd.concat([cov_past, macro_data[macro_data.index < future_idx[0]]], axis=1)
     if predictors_lst:
@@ -155,53 +134,67 @@ def form_input_to_forecasting(df: pd.DataFrame,
             cov_past[f"{additional_cluster}_lag1"] = all_add.reindex(past_idx)
 
     cov_past = cov_past.fillna(method="bfill").fillna(method="ffill")
-    if use_future_macro:
-        cov_future_values = []
-        for future_forecaster_ts_name, future_forecaster_single_ts_values in zip(future_forecaster_ts_names, future_forecaster_ts_values):
-            if future_forecaster_ts_name in macro_data.columns:
-                future_series_values = macro_data[future_forecaster_ts_name]
-            elif future_forecaster_ts_name in df.columns:
-                future_series_values = df[future_forecaster_ts_name]
-            else:
-                raise ValueError(f"future_forecaster_ts_name '{future_forecaster_ts_name}' not found in macro_data or df columns")
-            if is_backtest:
-                cov_future_values.append(pd.DataFrame(future_series_values[past_idx]))
-                cov_future_values.append(pd.DataFrame(future_series_values[future_idx]))
-
-            else:
-                cov_future_values.append(pd.DataFrame(future_series_values[past_idx]))
-                cov_future_values.append(pd.DataFrame(future_forecaster_single_ts_values,
-                                                       index=future_idx,
-                                                       columns=[future_forecaster_ts_name])
-                                         )
+    cov_future = None
+    if use_future_macro and future_forecaster_ts_name:
+        # For TFT/N-BEATS, future covariates must start earlier
+        if model_type in ["tftmodel", "nbeats", "n-beats"]:
+            future_cov_start = future_idx[0] - pd.DateOffset(months=input_chunk_length)
+        else:
+            future_cov_start = future_idx[0]
+        
+        future_cov_end = future_idx[-1]
+        future_cov_range = pd.date_range(start=future_cov_start,
+                                        end=future_cov_end,
+                                        freq='MS')
+        
+        cov_future = pd.DataFrame(index=future_cov_range)
+        # Fill with known future values for future period
+        # Fill with historical data for past period
+        for i, col in enumerate(future_forecaster_ts_name):
+            if col in macro_data.columns:
+                # Get historical values for the lookback period
+                hist_data = macro_data.loc[future_cov_start:future_idx[0] - pd.DateOffset(months=1), col]
                 
-        cov_future = pd.concat(cov_future_values)
-        cov_future = cov_future.groupby(cov_future.index).first()
-    else:
-        cov_future = None
-
+                # Get future values (your linear interpolation values)
+                future_vals = future_forecaster_ts_values[i]
+                
+                # Combine
+                all_vals = list(hist_data.values) + list(future_vals)
+                cov_future[col] = all_vals
+            elif col in df.columns:
+                # Get historical values for the lookback period
+                hist_data = df.loc[future_cov_start:future_idx[0] - pd.DateOffset(months=1), col]
+                
+                # Get future values (your linear interpolation values)
+                future_vals = future_forecaster_ts_values[i]
+                
+                # Combine
+                all_vals = list(hist_data.values) + list(future_vals)
+                cov_future[col] = all_vals
+    
     return cov_past, cov_future
 
 
 def train_model_and_eval_res(df_in: pd.DataFrame,
                              macro_data: pd.DataFrame,
-                             past_idx = past_idx,
-                             future_idx = future_idx,
-                             predict_up_to = SINGLE_DATAPOINT_TO_PRED,
-                             category_map: dict = CATEGORY_MAP,
-                             best_predictors_for_idx: dict = BEST_PREDICTORS_FOR_INDEX,
-                             target_col_suffix:str = TARGET_COL_SUFFIX,
-                             future_forecaster_ts_name: list[str] = FUTURE_FORECASTER_TS_NAME,
-                             future_forecaster_ts_values: list[list[Any]] = FUTURE_FORECASTER_TS_VALUES,
-                             model_name: str = MODEL_NAME_FOR_FORECASTER,
-                             use_future_macro: bool = USE_FUTURE_COV,
-                             prediction_horizon: int = PREDICTION_HORIZON,
-                             dir_to_save_plots: str = f"darts_result_pairs_{MODEL_NAME_FOR_FORECASTER}",
-                             dir_to_save_tables: str = f"darts_result_tables_pairs_{MODEL_NAME_FOR_FORECASTER}",
-                             persist_model: bool = PERSIST_MODEL,
-                             refit: bool = REFIT_MODEL,
-                             prediction_lag: int = PREDICTOR_LAG,
-                             is_backtest: bool = IS_BACKTEST
+                             past_idx,
+                             future_idx,
+                             predict_up_to,
+                             category_map: dict ,
+                             best_predictors_for_idx: dict,
+                             target_col_suffix:str,
+                             future_forecaster_ts_name: list[str],
+                             future_forecaster_ts_values: list[list[Any]] ,
+                             model_name: str ,
+                             use_future_macro: bool,
+                             prediction_horizon: int,
+                             dir_to_save_plots: str,
+                             dir_to_save_tables: str,
+                             persist_model: bool,
+                             refit: bool,
+                             prediction_lag: int,
+                             is_backtest: bool,
+                             ts_freq: str = "MS"
                             ):
     df = df_in.dropna()
     all_clusters = sorted(set(category_map.values()))
@@ -231,7 +224,7 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
             cluster_data=past_data_for_train,
             macro_data=macro_data_for_train,
             category_map=category_map,
-            freq="M",
+            freq=ts_freq,
             target_col_suffix=target_col_suffix,
             dir_to_save_plots=dir_to_save_plots,
             dir_to_save_tables=dir_to_save_tables,
@@ -243,20 +236,33 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
                 forecaster = forecaster.load(model_save_path)
             except Exception as e:
                 print(f"Did not found {model_save_path};Faild with error: {e}; Gonna train")
-                forecaster.train(target_cat, predictors_lst, use_future_macro=use_future_macro, past_covariate_lags=PREDICTOR_LAG)
+                forecaster.train(target_cat,
+                                 predictors_lst,
+                                 use_future_macro=use_future_macro,
+                                 past_covariate_lags=prediction_lag,
+                                 output_chunk_length_model=prediction_horizon
+                                 )
         else:
-            forecaster.train(target_cat, predictors_lst, use_future_macro=use_future_macro, past_covariate_lags=PREDICTOR_LAG)
+            forecaster.train(target_cat,
+                             predictors_lst,
+                             use_future_macro=use_future_macro,
+                             past_covariate_lags=prediction_lag,
+                             output_chunk_length_model=prediction_horizon
+                            )
+        cov_past, cov_future = form_input_to_forecasting(
+            df,
+            macro_data,
+            predictors_lst,
+            target_col_suffix,
+            future_forecaster_ts_name,
+            future_forecaster_ts_values,
+            past_idx, future_idx,
+            use_future_macro,
+            is_backtest,
+            model_type=model_name,
+            input_chunk_length=prediction_lag
+        )
 
-        cov_past, cov_future = form_input_to_forecasting(df,
-                                                          macro_data,
-                                                          predictors_lst,
-                                                          target_col_suffix,
-                                                          future_forecaster_ts_name,
-                                                          future_forecaster_ts_values,
-                                                          past_idx,
-                                                          future_idx,
-                                                          use_future_macro,
-                                                          is_backtest)
         df_target: pd.DataFrame = macro_data if macro_data_flag else df
         col_name: str = f"{target_cat}" if macro_data_flag else f"{target_cat}{target_col_suffix}" 
         
@@ -268,10 +274,6 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
             for idx, ts_future_known in enumerate(future_forecaster_ts_name):
 
                 if target_cat == ts_future_known:
-                    print("+"*100)
-                    print(ts_future_known)
-                    print("+"*100)
-                    print(target_s)
                     preds = pd.DataFrame({f"{target_cat}_preds": future_forecaster_ts_values[idx]})
                     preds.index = pd.date_range(start=future_idx[-1] + pd.DateOffset(months=1),
                           end=predict_up_to,
@@ -287,7 +289,7 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
         forecasts_for_cluster[target_cat] = preds
 
 
-        if USE_FUTURE_COV:
+        if use_future_macro:
             preds.index = target_s.index
         preds_ts_no_neg = TimeSeries.from_dataframe(preds.to_dataframe().abs())
 
@@ -329,25 +331,28 @@ def disaggregate_predictions_to_TS(df_in: pd.DataFrame,
 
 def get_prediction_for_ts(df_in: pd.DataFrame,
                           model_category,
-                          ts_to_predict_name: str = TS_TO_PREDICT,
-                          macro_data: pd.DataFrame = macro_data,
-                          prediction_len: int = 12,
-                          past_idx = past_idx,
-                          future_idx = future_idx,
-                          category_map: dict = CATEGORY_MAP,
-                          best_predictors_for_idx: dict = BEST_PREDICTORS_FOR_INDEX,
-                          target_col_suffix:str = TARGET_COL_SUFFIX,
-                          future_forecaster_ts_name:str = FUTURE_FORECASTER_TS_NAME,
-                          future_forecaster_ts_values: str = FUTURE_FORECASTER_TS_VALUES,
-                          use_future_macro: bool = USE_FUTURE_COV,
-                          prediction_horizon: int = PREDICTION_HORIZON,
-                          is_backtest: bool = IS_BACKTEST
+                          ts_to_predict_name: str,
+                          model_name: str,
+                          macro_data: pd.DataFrame,
+                          past_idx,
+                          future_idx,
+                          category_map: dict,
+                          best_predictors_for_idx: dict,
+                          target_col_suffix:str,
+                          future_forecaster_ts_name:str,
+                          future_forecaster_ts_values: str,
+                          use_future_macro: bool,
+                          prediction_horizon: int,
+                          is_backtest: bool,
+                          prediction_lag: int,
+                          predicted_index = None
 ):
     df = df_in.dropna()
     for idx, ts_name in enumerate(future_forecaster_ts_name):
         if ts_name == ts_to_predict_name:
             df_preds = pd.DataFrame({f"{ts_to_predict_name}_preds": future_forecaster_ts_values[idx]})
-            df_preds.index = DATE_LIST
+            if predicted_index is not None:
+                df_preds.index = predicted_index
             return df_preds[f"{ts_to_predict_name}_preds"], df_preds
 
     ts_name_normalized = ts_to_predict_name.replace("/", " ")
@@ -357,29 +362,34 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
     category_to_pred = category_map[ts_to_predict_name]
     predictors_lst = best_predictors_for_idx[category_to_pred]
     predictors_lst = predictors_lst if predictors_lst else []
-
-    cov_past, cov_future = form_input_to_forecasting(df,
-                                                      macro_data,
-                                                      predictors_lst,
-                                                      target_col_suffix,
-                                                      future_forecaster_ts_name,
-                                                      future_forecaster_ts_values,
-                                                      past_idx,
-                                                      future_idx,
-                                                      use_future_macro,
-                                                      is_backtest)
+    try:
+        cov_past, cov_future = form_input_to_forecasting(
+                                                        df,
+                                                        macro_data,
+                                                        predictors_lst,
+                                                        target_col_suffix,
+                                                        future_forecaster_ts_name,
+                                                        future_forecaster_ts_values,
+                                                        past_idx, future_idx,
+                                                        use_future_macro,
+                                                        is_backtest,
+                                                        model_type=model_name,
+                                                        input_chunk_length=prediction_lag
+                                )
+    except Excpetion as e:
+        print(f"Failed with new error: {e}")
     
-    predictions = model_category.forecast(prediction_len,
+
+    predictions = model_category.forecast(prediction_horizon,
                                         cov_past,
-                                        cov_future if USE_FUTURE_COV else None).to_dataframe().reset_index(drop=True)
+                                        cov_future if use_future_macro else None).to_dataframe().reset_index(drop=True)
+    
     ts_to_cats = {k: category_map[k] for k in set(list(category_map.keys())) - set(['Подсолнечное масло (наливом) не бутилированное, не'])}
 
     if is_predicting_macro:
         future_idx[-1]
         predictions.index = pd.date_range(future_idx[-1], future_idx[-1] + pd.DateOffset(months=prediction_horizon-1), freq='MS')
         predictions[f"{ts_to_predict_name}_preds"] = predictions[ts_to_predict_name]
-        print("MACRO PREDICTIONS COLUMNS")
-        print(predictions.columns)
         return predictions[f"{ts_to_predict_name}_preds"], predictions
 
     else:
@@ -388,10 +398,10 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
             predictions,
             category_to_pred,
             past_idx[-1],
-            category_map=CATEGORY_MAP
+            category_map=category_map
         )
 
-
-    df_per_ts.index = DATE_LIST
+    if predicted_index is not None:
+        df_per_ts.index = predicted_index
     # returns (TS prediction, metric result(if backtest), Cluster predictions)
     return df_per_ts[f"{ts_to_predict_name}_preds"], predictions

@@ -54,46 +54,6 @@ def plot_preds_on_curve(preds: pd.DataFrame,
         plt.savefig(f'{save_dir}/{cat_name_reg}_by_{pred_names}_sum_index_one_year.png')
 
 
-def robust_mape(actual, pred, epsilon=1e-8):
-    """
-    Robust MAPE that handles zero actual values.
-    
-    For non-zero actual: returns absolute percentage error
-    For zero actual: returns 0 if pred is epsilon-close to 0, otherwise returns |pred|
-    
-    Parameters:
-    -----------
-    actual : array-like
-        Actual values
-    pred : array-like
-        Predicted values
-    epsilon : float, default=1e-8
-        Tolerance for considering predictions as "close enough" to zero
-    
-    Returns:
-    --------
-    mape_value : float
-        The robust MAPE value
-    """
-    
-    actual = np.asarray(actual)
-    pred = np.asarray(pred)
-    
-    errors = []
-    
-    for a, p in zip(actual, pred):
-        if abs(a) > epsilon:  # Non-zero actual value
-            error = abs((a - p) / a)
-        else:  # Zero or near-zero actual value
-            if abs(p) <= epsilon:  # Prediction is close to zero
-                error = 0.0
-            else:  # Prediction is not close to zero
-                error = abs(p)  # Return absolute prediction value
-        
-        errors.append(error)
-    
-    return np.mean(errors) * 100  # Return as percentage
-
 class ClusterForecaster:
     def __init__(self,
                  cluster_data: pd.DataFrame,
@@ -120,6 +80,7 @@ class ClusterForecaster:
         self.features_cat_enc = features_cat_enc
         self.future_macro_col = future_macro_col
         self._trained_ts = None
+        self.future_cov_columns_used = None 
 
     def _prepare_series(self,
                         target_col: str,
@@ -162,6 +123,7 @@ class ClusterForecaster:
               past_covariate_lags: int = 12,
               train_end: pd.Timestamp = None,
               use_future_macro: bool = True,
+              output_chunk_length_model: int = 12,
               **model_kwargs):
         """
         Train model up to train_end (inclusive).
@@ -187,13 +149,27 @@ class ClusterForecaster:
         # cov_df[f"{target_cluster}_lag1"] = self.cluster_data[f"{target_cluster}{self.target_col_suffix}"].shift(1)
 
         if use_macro and use_future_macro and self.future_macro_col:
+             # Create future covariates that extend into the past
+            future_cov_start = self.cluster_data.index[0]
+            future_cov_end = self.cluster_data.index[-1]
+            
+            # For TFT/N-BEATS, we need future covariates that cover input window
+            if self.model_type.lower() in ["tftmodel", "nbeats", "n-beats"]:
+                # Extend the start back by input_chunk_length
+                future_cov_start = future_cov_start - pd.DateOffset(months=past_covariate_lags)
+            
+            future_cov_range = pd.date_range(start=future_cov_start, 
+                                            end=future_cov_end, 
+                                            freq=self.freq)
+            future_cov_df = pd.DataFrame(index=future_cov_range)
+            
             for future_col in self.future_macro_col:
+                # Fill with available data
                 if future_col in self.macro_data.columns:
-                    future_cov_df[future_col] = self.macro_data[future_col]
+                    future_cov_df[future_col] = self.macro_data.reindex(future_cov_range)[future_col]
                 elif future_col in self.cluster_data.columns:
-                    future_cov_df[future_col] = self.cluster_data[future_col]
-                else:
-                    raise ValueError(f"future_macro_col '{self.future_macro_col}' not found in macro_data or cluster_data columns")
+                    future_cov_df[future_col] = self.cluster_data.reindex(future_cov_range)[future_col]
+            self.future_cov_columns_used = list(future_cov_df.columns)
         # fill missing values (bfill or ffill as needed)
         #print(cov_df)
         #raise ValueError("debugging")
@@ -228,19 +204,21 @@ class ClusterForecaster:
         elif model_type_lower == "nbeats" or model_type_lower == "n-beats":
             # keep your previous NBEATS behaviour
             model = NBEATSModel(input_chunk_length=past_covariate_lags,
-                                output_chunk_length=12)
+                                output_chunk_length=output_chunk_length_model)
             # NBEATS supports covariates if configured (we pass past_covariates below)
             uses_covariates = True
             uses_future_covariates = False
         elif model_type_lower == "tftmodel":
             model = TFTModel(input_chunk_length=past_covariate_lags,
-                            output_chunk_length=12,
+                            output_chunk_length=output_chunk_length_model,
+                            add_relative_index=True,
+                            add_encoders=None,  # Disable automatic encoders if you're handling covariates manually
                             **model_kwargs)
             uses_covariates = True
             uses_future_covariates = True
         elif model_type_lower == "naiveseasonal":
             # user should provide K (seasonal period), default to 12 for monthly
-            K = model_kwargs.pop("K", 12)
+            K = model_kwargs.pop("K", output_chunk_length_model)
             model = NaiveSeasonal(K=K)
             uses_covariates = False
             uses_future_covariates = False
@@ -309,9 +287,6 @@ class ClusterForecaster:
         # We'll attempt to call with covariates only when they were used in training (check attribute)
         try:
             # many baseline models: predict(n)
-            print("!"*100)
-            cov_future_ts
-            print("!"*100)
             pred = self.model.predict(n=n,
                                       series=self._trained_ts,
                                       past_covariates=cov_past_ts,
