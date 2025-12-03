@@ -209,8 +209,7 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
         macro_data_for_train = macro_data[macro_data.index<=past_idx[0]]
     trained_models: dict[str, Type[ClusterForecaster]] = {}
     for target_cat in all_clusters:
-        if target_cat not in ('Ключевая ставка, годовых', 'Инфляция, г/г'):
-            continue
+
         macro_data_flag = target_cat in macro_data.columns
 
         target_cat_load_name = target_cat.replace("/", "_")
