@@ -255,6 +255,7 @@ class ClusterForecaster:
                  n: int = 12,
                  covariates_past: Optional[pd.DataFrame] = None,
                  covariates_future: Optional[pd.DataFrame] = None,
+                 train_series: Optional[TimeSeries] = None
                  ):
         """
         Forecast the next n steps beyond training data.
@@ -288,7 +289,7 @@ class ClusterForecaster:
         try:
             # many baseline models: predict(n)
             pred = self.model.predict(n=n,
-                                      series=self._trained_ts,
+                                      series=train_series if train_series is not None else self._trained_ts,
                                       past_covariates=cov_past_ts,
                                       future_covariates=cov_future_ts)  # works for models that accept covariates
         except TypeError:

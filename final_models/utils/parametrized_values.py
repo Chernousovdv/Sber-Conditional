@@ -1,5 +1,5 @@
 from itertools import combinations
-from typing import Type, Literal, Any
+from typing import Type, Literal, Any, Optional
 from darts import TimeSeries
 import pandas as pd
 import os
@@ -194,7 +194,8 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
                              refit: bool,
                              prediction_lag: int,
                              is_backtest: bool,
-                             ts_freq: str = "MS"
+                             ts_freq: str = "MS",
+                             pred_index: Optional[Any] = None
                             ):
     df = df_in.dropna()
     all_clusters = sorted(set(category_map.values()))
@@ -208,10 +209,12 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
         macro_data_for_train = macro_data[macro_data.index<=past_idx[0]]
     trained_models: dict[str, Type[ClusterForecaster]] = {}
     for target_cat in all_clusters:
+        if target_cat not in ('Ключевая ставка, годовых', 'Инфляция, г/г'):
+            continue
         macro_data_flag = target_cat in macro_data.columns
 
         target_cat_load_name = target_cat.replace("/", "_")
-        model_save_path: str = f"{model_name}_dataset/{model_name}_for_{target_cat_load_name}"
+        model_save_path: str = f"{model_name}_dataset/{model_name}_for_{target_cat_load_name}_{prediction_horizon}"
 
         if macro_data_flag: 
             start_date = past_data_for_train.index.min()
@@ -277,7 +280,7 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
                     preds = pd.DataFrame({f"{target_cat}_preds": future_forecaster_ts_values[idx]})
                     preds.index = pd.date_range(start=future_idx[-1] + pd.DateOffset(months=1),
                           end=predict_up_to,
-                          freq='MS')
+                          freq='MS') if not is_backtest else pred_index
                     preds = TimeSeries.from_dataframe(preds)
                     break
         else:
@@ -383,12 +386,12 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
     predictions = model_category.forecast(prediction_horizon,
                                         cov_past,
                                         cov_future if use_future_macro else None).to_dataframe().reset_index(drop=True)
-    
+    print(predictions)
     ts_to_cats = {k: category_map[k] for k in set(list(category_map.keys())) - set(['Подсолнечное масло (наливом) не бутилированное, не'])}
 
     if is_predicting_macro:
         future_idx[-1]
-        predictions.index = pd.date_range(future_idx[-1], future_idx[-1] + pd.DateOffset(months=prediction_horizon-1), freq='MS')
+        predictions.index = predicted_index
         predictions[f"{ts_to_predict_name}_preds"] = predictions[ts_to_predict_name]
         return predictions[f"{ts_to_predict_name}_preds"], predictions
 
