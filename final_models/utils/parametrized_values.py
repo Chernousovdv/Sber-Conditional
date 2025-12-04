@@ -278,7 +278,7 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
                     preds = pd.DataFrame({f"{target_cat}_preds": future_forecaster_ts_values[idx]})
                     preds.index = pd.date_range(start=future_idx[-1] + pd.DateOffset(months=1),
                           end=predict_up_to,
-                          freq='MS') if not is_backtest else pred_index
+                          freq='MS') if pred_index is None else pred_index
                     preds = TimeSeries.from_dataframe(preds)
                     break
         else:
