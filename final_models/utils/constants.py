@@ -92,7 +92,7 @@ BEST_PREDICTORS_FOR_INDEX = {
     "Инфляция - Рост индекса цен производителей в США, в долларах США (USD, eop PPI),": ['USDRUB'],
     "Ключевая ставка, годовых": ['USDRUB'],
     "Инфляция, г/г": ['USDRUB'],
-    "USDRUB": None
+    "USDRUB": ['USDRUB']
 }
 
 CAT_MAP_ENCODING = {

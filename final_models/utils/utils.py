@@ -87,7 +87,7 @@ def plot_graphics_for_each_ts(
     df_preds: pd.DataFrame,
     df_preds_naive: pd.DataFrame,
     goods_name: str,
-    mape_val: float,
+    mape_val: Union[float, str],
     mape_val_naive: float,
     predictor_name: str,
     save_dir: str,
@@ -126,14 +126,17 @@ def plot_graphics_for_each_ts(
     else:
         combined_dates = [last_true_date] + list(df_preds.index)
         combined_values = [last_true_value] + list(df_preds.values)   # Assuming single column
-
-    mape_val_short = round(mape_val*100, 2) if mape_val > 0 else None
+    if isinstance(mape_val, float):
+        mape_val_short: float = round(mape_val*100, 2) if mape_val > 0 else None
+        mape_val_short: str = str(mape_val_short)+"%" if mape_val_short else "Нулевой/Отрицательный MAPE"
+    else:
+        mape_val_short: str = "Для значений макропоказателей, метрика несчитается"
     # Plot predictions
     fig.add_trace(go.Scatter(
         x=combined_dates,
         y=combined_values,
         mode='lines+markers',
-        name=f"preds {goods_name_short}; MAPE: {mape_val_short}%",
+        name=f"preds {goods_name_short}; MAPE: {mape_val_short}",
         line=dict(color='maroon', width=2),
         marker=dict(size=6),
         hovertemplate='<b>Prediction</b><br>' +
@@ -143,8 +146,9 @@ def plot_graphics_for_each_ts(
     ))
     
     # Configure layout
-    title_text = f"TS for {goods_name} predicted by {predictor_name} with forecasting horizon of {forecasting_horizon} months" if is_backtest else f"TS for {goods_name} predicted by {predictor_name} up to date {up_to_date}"
-    
+    # title_text = f"TS for {goods_name} predicted by {predictor_name} with forecasting horizon of {forecasting_horizon} months" if is_backtest else f"TS for {goods_name} predicted by {predictor_name} up to date {up_to_date}"
+    title_text = f"{goods_name} (forecasting horizon = {forecasting_horizon} months)" if is_backtest else f"{goods_name})"
+
     fig.update_layout(
         title=dict(text=title_text),
         xaxis_title="Date with month frequent",
@@ -199,7 +203,7 @@ def plot_known_feature_value(knwow_series_vals: list[Union[int, float]],
     ))
     
     fig.update_layout(
-        title=dict(text=f"Future values for column: {known_series_name}"),
+        title=dict(text=f"INPUT: {known_series_name}"),
         xaxis_title="Date",
         yaxis_title=known_series_name,
         plot_bgcolor='lightgray',

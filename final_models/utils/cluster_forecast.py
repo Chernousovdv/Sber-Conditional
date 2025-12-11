@@ -8,7 +8,7 @@ from darts.models import (
     NaiveMovingAverage,
     ExponentialSmoothing,
     Theta,
-    RandomForestModel,
+    RandomForestModel
     # Chronos2Model # Requires python >= 3.10!
 )
 from pathlib import Path
@@ -78,7 +78,7 @@ def plot_preds_on_curve(preds: pd.DataFrame,
         x=preds.index,
         y=preds.iloc[:, 0] if preds.shape[1] == 1 else preds,
         mode='lines+markers',
-        name=f"Sum index of {cat_name} preds",
+        name=f"INDEX of {cat_name} preds",
         line=dict(color='maroon'),
         hovertemplate='<b>Prediction</b><br>' +
                      'Date: %{x}<br>' +
@@ -101,8 +101,9 @@ def plot_preds_on_curve(preds: pd.DataFrame,
     
     # Configure layout
     joined = "|".join(predictor_name) if isinstance(predictor_name, list) else str(predictor_name)
-    title_text = f"Sum index {cat_name} preds vs labels with predictor {joined}; curr mape: {mape_val:.2f}" if predictor_name else f"Sum index {cat_name} preds vs labels without any predictors; curr mape: {mape_val:.2f}"
-    
+    # title_text = f"Index {cat_name} preds vs labels with predictor {joined}; curr mape: {mape_val:.2f}" if predictor_name else f"Sum index {cat_name} preds vs labels without any predictors; curr mape: {mape_val:.2f}"
+    title_text = f"Index {cat_name}; curr mape: {mape_val:.2f}" if predictor_name else f"Index {cat_name}; curr mape: {mape_val:.2f}"
+
     fig.update_layout(
         title=dict(text=title_text),
         xaxis_title="Date",
@@ -117,13 +118,13 @@ def plot_preds_on_curve(preds: pd.DataFrame,
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
         cat_name_reg = cat_name.replace("/", "_")
-        plot_preds_on_curve_plt(preds,
-                               label,
-                               mape_val,
-                               predictor_name,
-                               cat_name,
-                               save_dir,
-                               feature_to_cat_enc)
+        # plot_preds_on_curve_plt(preds,
+        #                        label,
+        #                        mape_val,
+        #                        predictor_name,
+        #                        cat_name,
+        #                        save_dir,
+        #                        feature_to_cat_enc)
         # fig.write_html(f'{save_dir}/{cat_name_reg}_by_{pred_names}_sum_index_one_year.html')
         # fig.write_image(f'{save_dir}/{cat_name_reg}_by_{pred_names}_sum_index_one_year.png')
     # Display the figure
@@ -201,6 +202,7 @@ class ClusterForecaster:
               train_end: pd.Timestamp = None,
               use_future_macro: bool = True,
               output_chunk_length_model: int = 12,
+              is_backtest: bool = False,
               **model_kwargs):
         """
         Train model up to train_end (inclusive).
@@ -265,7 +267,7 @@ class ClusterForecaster:
             lags = model_kwargs.pop("lags", past_covariate_lags)
             lags_past_cov = model_kwargs.pop("lags_past_covariates", past_covariate_lags)
             # for future covariates: tuple (past_lags, future_lags)
-            lags_future_cov = model_kwargs.pop("lags_future_covariates", (1, 6))
+            lags_future_cov = model_kwargs.pop("lags_future_covariates", (1, 6) if len(self.future_macro_col)!=0 else None)
             output_len = model_kwargs.pop("output_chunk_length", 1)
 
             model = LinearRegressionModel(
@@ -291,6 +293,7 @@ class ClusterForecaster:
                             add_relative_index=True,
                             add_encoders=None,  # Disable automatic encoders if you're handling covariates manually
                             **model_kwargs)
+            model_kwargs.pop("lags_future_covariates", (1, 6))
             uses_covariates = True
             uses_future_covariates = True
         elif model_type_lower == "naiveseasonal":
@@ -304,9 +307,10 @@ class ClusterForecaster:
             lags = model_kwargs.pop("lags", past_covariate_lags)
             lags_past_cov = model_kwargs.pop("lags_past_covariates", past_covariate_lags)
             # for future covariates: tuple (past_lags, future_lags)
-            lags_future_cov = model_kwargs.pop("lags_future_covariates", (1, 6))
+            lags_future_cov = model_kwargs.pop("lags_future_covariates", (1, 6) if len(self.future_macro_col)!=0 else None)
             output_len = model_kwargs.pop("output_chunk_length", output_chunk_length_model)
-
+            if is_backtest:
+                lags_future_cov = None
             model = RandomForestModel(
                 lags=lags,
                 lags_past_covariates=lags_past_cov,
@@ -329,7 +333,8 @@ class ClusterForecaster:
 
         else:
             raise NotImplementedError(f"Model type {self.model_type} not implemented as baseline option")
-
+        if is_backtest:
+            uses_future_covariates = False
         # warn if covariates present but model doesn't use them
         if cov_ts is not None and not uses_covariates:
             warnings.warn(f"Model {self.model_type} does not support covariates; covariates will be ignored for fitting/prediction.")
@@ -361,7 +366,8 @@ class ClusterForecaster:
                  n: int = 12,
                  covariates_past: Optional[pd.DataFrame] = None,
                  covariates_future: Optional[pd.DataFrame] = None,
-                 train_series: Optional[TimeSeries] = None
+                 train_series: Optional[TimeSeries] = None,
+                 is_backtest: bool = False
                  ):
         """
         Forecast the next n steps beyond training data.
@@ -394,7 +400,12 @@ class ClusterForecaster:
         # We'll attempt to call with covariates only when they were used in training (check attribute)
         try:
             # many baseline models: predict(n)
-            pred = self.model.predict(n=n,
+            if is_backtest:
+                pred = self.model.predict(n=n,
+                                      series=train_series if train_series is not None else self._trained_ts,
+                                      past_covariates=cov_past_ts)
+            else:
+                pred = self.model.predict(n=n,
                                       series=train_series if train_series is not None else self._trained_ts,
                                       past_covariates=cov_past_ts,
                                       future_covariates=cov_future_ts)  # works for models that accept covariates
@@ -568,8 +579,8 @@ class ClusterForecaster:
         elif model_type_lower == "randomforest":
             forecaster.model = RandomForestModel.load(model_path)
             
-        # elif model_type_lower == "chronos":
-        #     forecaster.model = Chronos2Model.load(model_path)
+        elif model_type_lower == "chronos":
+            forecaster.model = Chronos2Model.load(model_path)
 
         else:
             raise ValueError(f"Unknown model type for loading: {forecaster.model_type}")

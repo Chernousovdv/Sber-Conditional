@@ -127,7 +127,7 @@ def form_input_to_forecasting(df: pd.DataFrame,
                               model_type: str,
                               input_chunk_length: int = 12): 
     cov_past = pd.DataFrame(index=past_idx)
-    cov_past = pd.concat([cov_past, macro_data[macro_data.index < future_idx[0]]], axis=1)
+    cov_past = pd.concat([cov_past, macro_data[macro_data.index <= past_idx[-1]]], axis=1)  if is_backtest else pd.concat([cov_past, macro_data[macro_data.index < future_idx[0]]], axis=1) 
     if predictors_lst:
         for additional_cluster in predictors_lst:
             all_add = df[f"{additional_cluster}{target_col_suffix}"].shift(1)
@@ -135,6 +135,8 @@ def form_input_to_forecasting(df: pd.DataFrame,
 
     cov_past = cov_past.fillna(method="bfill").fillna(method="ffill")
     cov_future = None
+    if is_backtest:
+        return cov_past, cov_future
     if use_future_macro and future_forecaster_ts_name:
         # For TFT/N-BEATS, future covariates must start earlier
         if model_type in ["tftmodel", "nbeats", "n-beats", "randomforest", "chronos"]:
@@ -212,7 +214,7 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
         macro_data_flag = target_cat in macro_data.columns
 
         target_cat_load_name = target_cat.replace("/", "_")
-        model_save_path: str = f"{model_name}_dataset/{model_name}_for_{target_cat_load_name}_{prediction_horizon}"
+        model_save_path: str = f"{model_name}_dataset/{model_name}_for_{target_cat_load_name}__{prediction_horizon}"
 
         if macro_data_flag: 
             start_date = past_data_for_train.index.min()
@@ -241,14 +243,16 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
                                  predictors_lst,
                                  use_future_macro=use_future_macro,
                                  past_covariate_lags=prediction_lag,
-                                 output_chunk_length_model=prediction_horizon
+                                 output_chunk_length_model=prediction_horizon,
+                                 is_backtest=is_backtest
                                  )
         else:
             forecaster.train(target_cat,
                              predictors_lst,
                              use_future_macro=use_future_macro,
                              past_covariate_lags=prediction_lag,
-                             output_chunk_length_model=prediction_horizon
+                             output_chunk_length_model=prediction_horizon,
+                             is_backtest=is_backtest
                             )
         cov_past, cov_future = form_input_to_forecasting(
             df,
@@ -267,9 +271,9 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
         df_target: pd.DataFrame = macro_data if macro_data_flag else df
         col_name: str = f"{target_cat}" if macro_data_flag else f"{target_cat}{target_col_suffix}" 
         
-        if use_future_macro:
+        if use_future_macro and not is_backtest:
             target_s = df_target[df_target.index >= pd.to_datetime(future_idx[0])][col_name]
-        else:
+        elif is_backtest or not use_future_macro:
             target_s = df_target[df_target.index >= pd.to_datetime(past_idx[0])][col_name]
         if target_cat in future_forecaster_ts_name:
             for idx, ts_future_known in enumerate(future_forecaster_ts_name):
@@ -284,14 +288,23 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
         else:
             preds = forecaster.forecast(prediction_horizon,
                                 cov_past,
-                                cov_future if use_future_macro else None)
+                                cov_future if use_future_macro else None,
+                                is_backtest=is_backtest)
 
         forecasters_for_cluster[target_cat] = forecaster
         forecasts_for_cluster[target_cat] = preds
 
 
-        if use_future_macro:
+        if use_future_macro and not is_backtest:
             preds.index = target_s.index
+        if is_backtest:
+            series_pd = preds.to_dataframe()
+            series_pd.index = past_idx
+            
+            # Convert back to TimeSeries
+            preds = TimeSeries.from_dataframe(series_pd, freq=ts_freq)
+            # preds = preds.with_times(past_idx)
+
         preds_ts_no_neg = TimeSeries.from_dataframe(preds.to_dataframe().abs())
 
         pred_ts, actual_ts, metrics = forecaster.plot_and_return_data_backtest(TimeSeries.from_series(target_s.abs()),
@@ -306,16 +319,24 @@ def train_model_and_eval_res(df_in: pd.DataFrame,
     return trained_models
             
 
-
 def disaggregate_predictions_to_TS(df_in: pd.DataFrame,
                                    pred_df: pd.DataFrame,
                                    cluster_name: str,
                                    train_end: pd.Timestamp,
-                                   category_map: dict[str, str] = CATEGORY_MAP):
+                                   future_forecaster_changes: list[float],
+                                   increase_by_changes: bool,
+                                   category_map: dict[str, str] = CATEGORY_MAP,
+                                   prediction_horizon: int=12):
     df = df_in.copy()
     df.columns = [col_name.replace("/", " ") for col_name in df.columns]
-    # Берем в качестве нормировки последнее доступное значение из обучающей выборке
-    scaled_vals = pred_df[f"{cluster_name}_norm_sum"] / df[df.index == train_end][f"{cluster_name}_norm_sum"].iloc[0] 
+    # Берем в качестве нормировки последние доступные значения
+    
+    # scaling_date = train_end + pd.DateOffset(months=prediction_horizon)
+    scaling_date = train_end
+   
+    scaled_vals = np.diff(pred_df[f"{cluster_name}_norm_sum"] / df[df.index == scaling_date][f"{cluster_name}_norm_sum"].iloc[0])
+    scaled_vals = np.cumsum(np.array(list(scaled_vals)+[0])) + 1
+
     ts_to_scale = []
     for ts_name, cat_name in category_map.items():
         if cat_name == cluster_name:
@@ -324,11 +345,17 @@ def disaggregate_predictions_to_TS(df_in: pd.DataFrame,
         if item not in df.columns:
             continue
         df_cut = df[f"{item}"]
-        df_cut = df_cut[df_cut.index == train_end].iloc[0]
-        pred_df[f"{item}_preds"] = df_cut*scaled_vals
+        # df_cut = np.mean(df_cut.loc[df_cut.index <= scaling_date].iloc[-6:-1])
+        df_cut = np.mean(df_cut.loc[df_cut.index <= scaling_date].iloc[-1])
+        
+        if increase_by_changes:
+            changes = (1 + np.array(future_forecaster_changes)*0.2)
+            pred_df[f"{item}_preds"] = df_cut*(scaled_vals + changes)/2
+        else:
+            pred_df[f"{item}_preds"] = df_cut*scaled_vals
 
     return pred_df
-    
+
 
 def get_prediction_for_ts(df_in: pd.DataFrame,
                           model_category,
@@ -377,18 +404,26 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
                                                         model_type=model_name,
                                                         input_chunk_length=prediction_lag
                                 )
-    except Excpetion as e:
+    except Exception as e:
         print(f"Failed with new error: {e}")
     
 
     predictions = model_category.forecast(prediction_horizon,
                                         cov_past,
-                                        cov_future if use_future_macro else None).to_dataframe().reset_index(drop=True)
-    print(predictions)
+                                        cov_future if use_future_macro else None,
+                                        is_backtest=is_backtest).to_dataframe().reset_index(drop=True)
+    if len(future_forecaster_ts_name) == 0:
+        print(future_forecaster_ts_name)
+        increase_by_changes = False
+        changes = []
+    else:
+        increase_by_changes = category_map.get(ts_to_predict_name, "") == category_map.get(future_forecaster_ts_name[0], "")
+        changes = [(x / future_forecaster_ts_values[0][0]) - 1 for x in future_forecaster_ts_values[0]]
+        print(f'changes = {changes}')
+
     ts_to_cats = {k: category_map[k] for k in set(list(category_map.keys())) - set(['Подсолнечное масло (наливом) не бутилированное, не'])}
 
     if is_predicting_macro:
-        future_idx[-1]
         predictions.index = predicted_index
         predictions[f"{ts_to_predict_name}_preds"] = predictions[ts_to_predict_name]
         return predictions[f"{ts_to_predict_name}_preds"], predictions
@@ -399,7 +434,10 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
             predictions,
             category_to_pred,
             past_idx[-1],
-            category_map=category_map
+            changes,
+            increase_by_changes,
+            category_map=category_map,
+            prediction_horizon=prediction_horizon
         )
 
     if predicted_index is not None:
