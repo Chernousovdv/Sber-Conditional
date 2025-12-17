@@ -1,4 +1,24 @@
-Stuff/
-lightning_logs/
+/*  
+# Ignore everything in repository root 
 .xlsx
 .venv
+
+
+
+
+# Files to not ignore
+!/.gitignore
+!/requirements.txt
+!/Forecasting_with_future_knowledge.ipynb
+
+
+# Folder to not ignore
+!/Data/
+!/utils/
+
+!/Data/*
+!/utils/*
+
+
+# ignore cache
+/utils/__pycache__
