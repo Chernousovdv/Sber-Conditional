@@ -1,9 +1,0 @@
-# .dockerignore
-venv/
-.venv/
-env/
-__pycache__/
-*.pyc
-.git
-.gitignore
-README.md
