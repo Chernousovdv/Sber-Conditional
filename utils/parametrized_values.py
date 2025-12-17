@@ -40,7 +40,7 @@ chemicals_nona = chemicals_nona.set_index('Date')
 
 global_macros = global_macros.drop(columns=["Инфляция - Рост индекса потребительских цен в США, в долларах США (USD, eop CPI),  .1"])
 
-apk_nona["Date"] = apk_nona["Unnamed: 0"]
+apk_nona["Date"] = apk_nona["Date"]
 apk_nona["Date"] = pd.to_datetime(apk_nona["Date"])
 
 global_macros = global_macros.iloc[3:][::-1].reset_index(drop=True)
