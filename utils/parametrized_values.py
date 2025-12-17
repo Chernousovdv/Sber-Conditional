@@ -6,62 +6,23 @@ import os
 from dateutil.relativedelta import relativedelta
 from utils.constants import (
     CATEGORY_MAP,
-    BEST_PREDICTORS_FOR_INDEX
+    BEST_PREDICTORS_FOR_INDEX,
+    apk_nona_en,
+    chemicals_nona_en,
+    global_macros_en
 )
 from utils.utils import (
     get_month_beginnings
 )
 from utils.TS_normalizations import transform_categories
-from utils.data_prepocessing import _ensure_monthly_index_and_align_exog
 from utils.cluster_forecast import ClusterForecaster
 import os
 import numpy as np
 
 
-BASE_DIR = os.path.dirname(os.path.dirname(__file__))   # go up from utils/ to project root
-DATA_DIR = os.path.join(BASE_DIR, "Data")
+df_combined = transform_categories(pd.concat([apk_nona_en.dropna(), chemicals_nona_en.dropna()], axis=1))
 
-directory = f"{DATA_DIR}/"  # set directory path
-d = {}
-formed = {}
-
-for i, entry in enumerate(os.scandir(directory)):  
-    if entry.is_file() and entry.name.endswith('.xlsx'):  # check if it's a file
-        d[entry.name] = pd.read_excel(f"{directory}{entry.name}")
-    elif entry.is_file() and entry.name.endswith('.csv'):
-        formed[entry.name] = pd.read_csv(f"{directory}{entry.name}")
-
-global_macros = d["global_macro.xlsx"]
-apk_nona = formed["apk_nona.csv"]
-
-chemicals_nona = formed["chemicals_nona.csv"]
-chemicals_nona["Date"] = pd.to_datetime(chemicals_nona["Date"])
-chemicals_nona = chemicals_nona.set_index('Date')
-
-global_macros = global_macros.drop(columns=["Инфляция - Рост индекса потребительских цен в США, в долларах США (USD, eop CPI),  .1"])
-
-apk_nona["Date"] = apk_nona["Date"]
-apk_nona["Date"] = pd.to_datetime(apk_nona["Date"])
-
-global_macros = global_macros.iloc[3:][::-1].reset_index(drop=True)
-global_macros = global_macros.drop(columns=["Date"])
-global_macros.index = apk_nona["Date"]
-
-apk_nona = apk_nona.set_index('Date')
-
-
-assert global_macros.shape[0] == apk_nona.shape[0]
-
-
-apk_nona_en, global_macros_en = _ensure_monthly_index_and_align_exog(apk_nona, global_macros)
-chemicals_nona_en, global_macros_en_chemicals = _ensure_monthly_index_and_align_exog(chemicals_nona[chemicals_nona.index<=global_macros.index.max()],
-                                                                                     global_macros[global_macros.index>=chemicals_nona.index.min()])
-global_macros_en.columns = list(map(lambda x: " ".join(x.split()), list(global_macros_en.columns)))  # убираем табы
-apk_nona_en_rol = transform_categories(apk_nona_en)
-chemicals_nona_en_rol = transform_categories(chemicals_nona_en)
-
-macro_data = global_macros_en[global_macros_en.index >= apk_nona_en_rol.dropna().index[0]]
-df_combined = pd.concat([apk_nona_en_rol.dropna(), chemicals_nona_en_rol.dropna()], axis=1)
+macro_data = global_macros_en[global_macros_en.index >= df_combined.dropna().index[0]]
 
 
 def form_df_future(extended_index,
@@ -78,6 +39,8 @@ def form_df_future(extended_index,
     df_updated = pd.concat([df_combined, df_extended])
     macro_updated = pd.concat([macro_data, macro_extended])
     future_forecaster_ts_values = []
+    df_updated.columns = [col.replace("/", " ") for col in df_updated.columns]
+    df_combined.columns = [col.replace("/", " ") for col in df_updated.columns]
     for idx, col_name in enumerate(future_forecaster_ts_names):
         if col_name in df_updated.columns:
             # Get the future values for this column
@@ -394,22 +357,22 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
     category_to_pred = category_map[ts_to_predict_name]
     predictors_lst = best_predictors_for_idx[category_to_pred]
     predictors_lst = predictors_lst if predictors_lst else []
-    try:
-        cov_past, cov_future = form_input_to_forecasting(
-                                                        df,
-                                                        macro_data,
-                                                        predictors_lst,
-                                                        target_col_suffix,
-                                                        future_forecaster_ts_name,
-                                                        future_forecaster_ts_values,
-                                                        past_idx, future_idx,
-                                                        use_future_macro,
-                                                        is_backtest,
-                                                        model_type=model_name,
-                                                        input_chunk_length=prediction_lag
+    #try:
+    cov_past, cov_future = form_input_to_forecasting(
+                                                    df,
+                                                    macro_data,
+                                                    predictors_lst,
+                                                    target_col_suffix,
+                                                    future_forecaster_ts_name,
+                                                    future_forecaster_ts_values,
+                                                    past_idx, future_idx,
+                                                    use_future_macro,
+                                                    is_backtest,
+                                                    model_type=model_name,
+                                                    input_chunk_length=prediction_lag
                                 )
-    except Exception as e:
-        print(f"Failed with new error: {e}")
+    # except Exception as e:
+    #     print(f"Failed with new error: {e}")
     
 
     predictions = model_category.forecast(prediction_horizon,

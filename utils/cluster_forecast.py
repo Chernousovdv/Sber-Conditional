@@ -17,7 +17,6 @@ from darts.metrics import mape, mae, rmse
 import pandas as pd
 from typing import Optional, Union
 import warnings
-from .constants import CAT_MAP_ENCODING
 import os
 import pickle
 import matplotlib.pyplot as plt
@@ -33,9 +32,8 @@ def plot_preds_on_curve_plt(preds: pd.DataFrame,
                         mape_val: float,
                         predictor_name: Union[str, list[str]],
                         cat_name: str,
-                        save_dir: str,
-                        feature_to_cat_enc: dict[str, str] = CAT_MAP_ENCODING):
-    pred_names = "+".join([str(feature_to_cat_enc[pred_name]) for pred_name in predictor_name]) if isinstance(predictor_name, list) else predictor_name
+                        save_dir: str):
+    pred_names = "+".join([str(pred_name) for pred_name in predictor_name]) if isinstance(predictor_name, list) else predictor_name
         
     fig, ax = plt.subplots(figsize=(8, 6))
     fig.patch.set_facecolor('lightgray')
@@ -62,13 +60,12 @@ def plot_preds_on_curve(preds: pd.DataFrame,
                                mape_val: float,
                                predictor_name: Union[str, list[str]],
                                cat_name: str,
-                               save_dir: str,
-                               feature_to_cat_enc: dict[str, str] = CAT_MAP_ENCODING):
+                               save_dir: str):
     """
     Plot predictions vs labels using Plotly with hover functionality
     """
     # Prepare predictor names for title
-    pred_names = "+".join([str(feature_to_cat_enc[pred_name]) for pred_name in predictor_name]) if isinstance(predictor_name, list) else predictor_name
+    pred_names = "+".join([str(pred_name) for pred_name in predictor_name]) if isinstance(predictor_name, list) else predictor_name
     
     # Create figure
     fig = go.Figure()
@@ -142,7 +139,6 @@ class ClusterForecaster:
                  dir_to_save_plots: str = "darts_result",
                  dir_to_save_tables: str = "darts_result_tables",
                  future_macro_col: list[str] = [],
-                 features_cat_enc: dict[str, int] = CAT_MAP_ENCODING,
                  model_type: str = "NaiveSeasonal"):
         self.cluster_data = cluster_data
         self.macro_data = macro_data
@@ -155,7 +151,6 @@ class ClusterForecaster:
         self.target_col_suffix = target_col_suffix
         self.dir_to_save_plots = dir_to_save_plots
         self.dir_to_save_tables = dir_to_save_tables
-        self.features_cat_enc = features_cat_enc
         self.future_macro_col = future_macro_col
         self._trained_ts = None
         self.future_cov_columns_used = None 
@@ -490,8 +485,7 @@ class ClusterForecaster:
                             mape_val,
                             additional_clusters,
                             target_cluster,
-                            self.dir_to_save_plots,
-                            feature_to_cat_enc=self.features_cat_enc)
+                            self.dir_to_save_plots)
 
         metrics = {"MAPE": mape_val, "MAE": mae_val, "RMSE": rmse_val}
         predictors_label = "none" if not additional_clusters else "_".join(additional_clusters)
