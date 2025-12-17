@@ -1,0 +1,9 @@
+pandas
+matplotlib
+seaborn==0.13.2
+numpy
+scikit-learn==1.6.1
+pickle
+darts==0.37.1
+lightgbm==4.6.0
+openpyxl-3.1.5

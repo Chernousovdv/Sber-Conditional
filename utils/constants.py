@@ -46,5 +46,67 @@ CATEGORY_MAP = {
     "Какао-бобы (USD)": "Stimuli Crops",
     "Какао-бобы": "Stimuli Crops",
     "Табак (USD)": "Stimuli Crops",
-    "Табак": "Stimuli Crops"
+    "Табак": "Stimuli Crops",
+
+    # Chemicals
+    # dip
+    "Карбамид (FOB Южный)": "dip",
+    "Моноаммонийфосфат, MAP (FOB Балтика)": "dip",
+    "Апатитовый концетрат (FOB Morocco)": "dip",
+    "Аммиак (FOB Черное море)": "dip",
+    "Аммиачная селитра (FOB Черное море)": "dip",
+    "Хлорид калия (CFR Ю-В Азия)": "dip",
+
+    # bump
+    "Капролактам импортный контракт (Тайвань и Ю. Корея) CFR Азия": "bump",
+    "Метанол": "bump",
+    "Бензол, CFR Япония": "bump",
+    "Этилен, CFR Китай": "bump"   
+}
+
+## Best predictors gained for each cluster by experiments; could be changed
+BEST_PREDICTORS_FOR_INDEX = {
+    'Fish': ['Oils & Meals', 'Sugar & Flour'],
+    'Grains & Seeds': ['Oils & Meals', 'Processed Meat'],
+    'Livestock & Meat': ['Processed Meat', 'Vegetables'],
+    'Oils & Meals': ['Grains & Seeds', 'Vegetables'],
+    'Processed Meat': ['Oils & Meals', 'Sugar & Flour'],
+    'Stimuli Crops': ['Sugar & Flour', 'Vegetables'],
+    'Sugar & Flour': ['Livestock & Meat', 'Vegetables'],
+    'Vegetables': ['Livestock & Meat', 'Sugar & Flour'],
+    'dip': None,
+    'bump': None
+}
+BEST_PREDICTORS_FOR_INDEX_CHEMICALS = {
+    'dip': None,
+    'bump': None
+}
+
+CAT_MAP_ENCODING = {
+ 'Sugar & Flour': 0,
+ 'Vegetables': 1,
+ 'Oils & Meals': 2,
+ 'Fish': 3,
+ 'Livestock & Meat': 4,
+ 'Stimuli Crops': 5,
+ 'Processed Meat': 6,
+ 'Grains & Seeds': 7
+}
+
+CATEGORY_MAP_CHEMICALS = {
+    "Карбамид (FOB Южный)": "dip",
+    "Моноаммонийфосфат, MAP (FOB Балтика)": "dip",
+    "Апатитовый концетрат (FOB Morocco)": "dip",
+    "Аммиак (FOB Черное море)": "dip",
+    "Аммиачная селитра (FOB Черное море)": "dip",
+    "Хлорид калия (CFR Ю-В Азия)": "dip",
+    "Капролактам импортный контракт (Тайвань и Ю. Корея) CFR Азия": "bump",
+    "Метанол": "bump",
+    "Бензол, CFR Япония": "bump",
+    "Этилен, CFR Китай": "bump"   
+}
+
+CATEGORY_MAP_CHEMICALS_ENCODING = {
+ 'dip': 0,
+ 'bump': 1
 }

@@ -1,7 +1,8 @@
 import pandas as pd
 import warnings
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 import pickle
+import numpy as np
 
 
 def _ensure_monthly_index_and_align_exog(
@@ -138,3 +139,158 @@ def save_model_to_file(model, save_dir: str):
     
     with open('random_forest_regressor.pkl', 'wb') as file:
         pickle.dump(model, file)
+
+
+def _get_final_estimator(estimator):
+    """
+    If estimator is a sklearn Pipeline, return the last estimator else return estimator.
+    """
+    if isinstance(estimator, Pipeline):
+        return estimator.steps[-1][1]
+    return estimator
+
+def _extract_feature_importances_from_estimator(estimator) -> Optional[np.ndarray]:
+    """
+    Return feature importances array from estimator if possible.
+    Supports tree-based estimators (.feature_importances_) and linear (.coef_).
+    Returns None if estimator doesn't expose importances.
+    """
+    est = _get_final_estimator(estimator)
+    # Tree-based
+    if hasattr(est, "feature_importances_"):
+        return np.asarray(est.feature_importances_)
+    # Linear / coef-based
+    if hasattr(est, "coef_"):
+        coef = np.asarray(est.coef_)
+        # coef may be 1d or 2d (multioutput). If 2d, average absolute across outputs.
+        if coef.ndim == 1:
+            return np.abs(coef)
+        else:
+            return np.mean(np.abs(coef), axis=0)
+    # sklearn newer attribute feature_importances_in_? not standard — fallback None
+    return None
+
+
+def plot_forecaster_feature_importance(
+    forecaster,
+    series: pd.DataFrame,
+    iteration: int = None,
+    target_level: str = None,
+    predicted_by: str = None,
+    exog: Optional[pd.DataFrame] = None,
+    step: Optional[int] = None,
+    top_n: Optional[int] = 25,
+    average_across_steps: bool = False,
+    steps_to_use: Optional[list[int]] = None,
+    figsize=(10,6),
+    ascending=False,
+    title: Optional[str] = None
+) -> dict[str, Any]:
+    """
+    Plot feature importances for a trained ForecasterDirectMultiVariate.
+
+    Parameters
+    ----------
+    forecaster : fitted ForecasterDirectMultiVariate
+        The forecaster must already be fitted (forecaster.fit(...)).
+    series : pd.DataFrame
+        The series DataFrame used for training (wide format).
+    exog : pd.DataFrame or None
+        Exogenous DataFrame used for training (aligned with series).
+    step : int or None
+        If specified, show importances for that specific step (1..steps). If None and average_across_steps==False
+        the function will plot importances for the first step.
+    top_n : int or None
+        How many top features to display (None -> all).
+    average_across_steps : bool
+        If True, compute mean importance across the selected steps and plot a single aggregated ranking.
+    steps_to_use : list[int] or None
+        List of steps to include when averaging. If None, use all `forecaster.regressors_.keys()`.
+    Returns
+    -------
+    dict with keys:
+      - 'features' : pd.Index of feature names
+      - 'importances' : numpy array of importances (same length)
+      - 'fig' : matplotlib Figure
+    """
+    # 1) basic checks
+    if not hasattr(forecaster, "regressors_"):
+        raise ValueError("Forecaster does not appear to be fitted or does not have regressors_. Fit it first.")
+
+    # 2) get training matrices that skforecast used (this gives correct feature names/order).
+    # For multivariate direct forecaster, use create_train_X_y(series, exog)
+    X_train, y_train = forecaster.create_train_X_y(series, exog=exog)
+    # X_train is the full matrix used to train all step models (columns include suffixes like '_step_i')
+    # For a particular step, we need to filter the columns needed for that step.
+    # If user asked for a specific step:
+    if step is None:
+        # default step = first step
+        step = list(forecaster.regressors_.keys())[0] if hasattr(forecaster, "regressors_") else 1
+
+    # If averaging across steps, decide which steps to use
+    if average_across_steps:
+        if steps_to_use is None:
+            steps_to_use = sorted(list(forecaster.regressors_.keys()))
+        # accumulate importances for each step
+        importance_list = []
+        feature_names_list = []
+        for s in steps_to_use:
+            X_step, y_step = forecaster.filter_train_X_y_for_step(s, X_train, y_train, remove_suffix=True)
+            est = forecaster.regressors_.get(s, None)
+            if est is None:
+                warnings.warn(f"No trained estimator for step {s} found in forecaster.regressors_. Skipping step.")
+                continue
+            imp = _extract_feature_importances_from_estimator(est)
+            if imp is None:
+                warnings.warn(f"Estimator for step {s} exposes no feature importances. Skipping step.")
+                continue
+            # imp must correspond to X_step.columns order
+            feature_names_list.append(X_step.columns)
+            importance_list.append(pd.Series(imp, index=X_step.columns))
+        if len(importance_list) == 0:
+            raise ValueError("No feature importances found for any steps.")
+        # align series and compute mean importance across steps
+        imp_df = pd.concat(importance_list, axis=1).fillna(0)
+        mean_imp = imp_df.mean(axis=1)
+        feat_names = mean_imp.index
+        importances = mean_imp.values
+    else:
+        # single step case
+        X_step, y_step = forecaster.filter_train_X_y_for_step(step, X_train, y_train, remove_suffix=True)
+        est = forecaster.regressors_.get(step, None)
+        if est is None:
+            raise ValueError(f"No trained estimator for step={step} found in forecaster.regressors_.")
+        imp = _extract_feature_importances_from_estimator(est)
+        if imp is None:
+            raise ValueError("Estimator does not expose feature importances (not a tree or linear model).")
+        # imp should match X_step.columns order
+        feat_names = X_step.columns
+        # If imp length differs from number of features, attempt to use estimator.feature_names_in_ if available
+        if len(imp) != len(feat_names):
+            # try to use feature_names_in_ if present
+            est_final = _get_final_estimator(est)
+            if hasattr(est_final, "feature_names_in_"):
+                feat_names = pd.Index(est_final.feature_names_in_)
+            # else: best-effort: trim or pad imp
+            if len(imp) > len(feat_names):
+                imp = imp[:len(feat_names)]
+            elif len(imp) < len(feat_names):
+                # pad with zeros
+                imp = np.concatenate([imp, np.zeros(len(feat_names) - len(imp))])
+        importances = np.asarray(imp)
+
+    # 3) build dataframe and plot
+    imp_df = pd.Series(importances, index=feat_names).sort_values(ascending=ascending)
+    if top_n is not None:
+        imp_df = imp_df.iloc[-top_n:] if not ascending else imp_df.iloc[:top_n]
+
+    fig, ax = plt.subplots(figsize=figsize)
+    imp_df.plot(kind='barh', ax=ax)
+    ax.set_xlabel("Importance (abs or tree feature_importances_)")
+    t = title or f"Feature importances (model id={getattr(forecaster, 'forecaster_id', None)}, step={step})"
+    ax.set_title(t)
+    plt.tight_layout()
+    os.makedirs(f"results/{target_level}_{predicted_by}_featureimportance", exist_ok=True)
+    plt.savefig(f"results/{target_level}_{predicted_by}_featureimportance/{target_level}_{predicted_by}_{iteration}.png")
+
+    # return {'features': feat_names, 'importances': importances, 'fig': fig}
