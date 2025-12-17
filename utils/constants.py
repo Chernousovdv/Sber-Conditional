@@ -46,7 +46,7 @@ chemicals_nona_en, global_macros_en_chemicals = _ensure_monthly_index_and_align_
 global_macros_en.columns = list(map(lambda x: " ".join(x.split()), list(global_macros_en.columns)))  # убираем табы
 
 
-USE_DEFAULT_CATEGORY_MAP: bool = True
+USE_DEFAULT_CATEGORY_MAP: bool = False
 DISTANCE_METHOD: Literal["correlation", "Engle-Granger", "Johansen"] = "correlation"
 LINKAGE_METHOD: Literal["single", "complete", "average", "ward"] = "ward"
 THRESHOLD_FOR_CLUSTER_VAL: float = 0.2

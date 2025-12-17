@@ -408,6 +408,15 @@ class ClusterForecaster:
             # fallback: call without covariates
             pred = self.model.predict(n=n)
 
+        values = pred.values(copy=True)
+        values = np.maximum(values, 0.0)
+        
+        pred = TimeSeries.from_times_and_values(
+            times=pred.time_index,
+            values=values,
+            freq=pred.freq,
+            columns=pred.components
+        )
         return pred
 
     def backtest(self,
