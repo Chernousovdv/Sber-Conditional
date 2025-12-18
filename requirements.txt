@@ -1,9 +1,45 @@
-pandas
-matplotlib
-seaborn==0.13.2
-numpy
-scikit-learn==1.6.1
-darts
-lightgbm==4.6.0
-openpyxl==3.1.5
-plotly
+# Core Data Science
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.13.0
+plotly>=5.18.0
+
+# Machine Learning
+scikit-learn>=1.3.0,<2.0.0
+lightgbm>=4.0.0,<5.0.0
+
+# Time Series & Forecasting
+darts[torch]>=0.29.0,<0.40.0  # [torch] for full deep learning model support
+statsmodels>=0.14.0
+statsforecast>=1.6.0  # For AutoARIMA, AutoETS, Croston models
+xgboost>=2.0.0  # XGBoost support for Darts
+
+# Deep Learning (PyTorch)
+# Install torch separately for your platform: https://pytorch.org/get-started/locally/
+# For CUDA: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# For CPU only: pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+torch>=2.0.0
+pytorch-lightning>=2.0.0  # Required for Darts deep learning models (TFT, N-BEATS)
+
+# Hugging Face ecosystem (compatible versions to fix ImportError)
+# NOTE: transformers requires huggingface-hub>=0.30.0,<1.0
+# If you get version conflicts, run: pip install --upgrade transformers huggingface-hub
+transformers>=4.40.0,<4.50.0
+huggingface-hub>=0.23.0,<1.0.0
+
+# Chronos Forecasting (optional, for Chronos2Model)
+# chronos-forecasting>=1.0.0  # Uncomment if using Chronos models
+
+# File I/O
+openpyxl>=3.1.0
+
+# Statistics & Scientific Computing  
+scipy>=1.11.0
+
+# Utilities
+python-dateutil>=2.8.2
+nbformat>=4.2.0
+tqdm>=4.66.0  # Progress bars
