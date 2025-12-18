@@ -46,7 +46,7 @@ chemicals_nona_en, global_macros_en_chemicals = _ensure_monthly_index_and_align_
 global_macros_en.columns = list(map(lambda x: " ".join(x.split()), list(global_macros_en.columns)))  # убираем табы
 
 
-USE_DEFAULT_CATEGORY_MAP: bool = False
+USE_DEFAULT_CATEGORY_MAP: bool = True
 DISTANCE_METHOD: Literal["correlation", "Engle-Granger", "Johansen"] = "correlation"
 LINKAGE_METHOD: Literal["single", "complete", "average", "ward"] = "ward"
 THRESHOLD_FOR_CLUSTER_VAL: float = 0.2
@@ -144,12 +144,12 @@ BEST_PREDICTORS_FOR_INDEX = {
     'Стимулирующие культуры': ['USDRUB'],
     'Сахар и мука': ['USDRUB'],
     'Овощи': ['USDRUB'],
-    'Удобрения и агрохимикаты': ['USDRUB'],
+    'Удобрения и агрохимикаты': ['USDRUB', "Unexsiting category"],
     'Органические химикаты': ['USDRUB'],
     "Инфляция - Рост индекса цен производителей (RUB, eop PPI),": ['USDRUB'],
     "Инфляция - Рост индекса потребительских цен в США, в долларах США (USD, eop CPI),": ['USDRUB'],
     "Инфляция - Рост индекса цен производителей в США, в долларах США (USD, eop PPI),": ['USDRUB'],
-    "Ключевая ставка, годовых": ['USDRUB'],
+    "Ключевая ставка, годовых": ['Инфляция - Рост индекса цен производителей (RUB, eop PPI),'],
     "Инфляция, г/г": ['USDRUB'],
     "USDRUB": ['USDRUB']
 } if USE_DEFAULT_CATEGORY_MAP else {v: None for v in CATEGORY_MAP.values()}

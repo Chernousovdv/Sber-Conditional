@@ -218,7 +218,10 @@ class ClusterForecaster:
         if additional_clusters:
             for add in additional_clusters:
                 col_name = f"{add}_lag1"
-                cov_df[col_name] = self.cluster_data[f"{add}{self.target_col_suffix}"].shift(1)
+                if f"{add}{self.target_col_suffix}" in self.cluster_data:
+                    cov_df[col_name] = self.cluster_data[f"{add}{self.target_col_suffix}"].shift(1)
+                else:
+                    print("Warning! The additional cluster column does not exists in cluster_data")
         # assert target_cluster, "Target column must be not emptry string or None!"
         # cov_df[f"{target_cluster}_lag1"] = self.cluster_data[f"{target_cluster}{self.target_col_suffix}"].shift(1)
 

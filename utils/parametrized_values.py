@@ -93,8 +93,12 @@ def form_input_to_forecasting(df: pd.DataFrame,
     cov_past = pd.concat([cov_past, macro_data[macro_data.index <= past_idx[-1]]], axis=1)  if is_backtest else pd.concat([cov_past, macro_data[macro_data.index < future_idx[0]]], axis=1) 
     if predictors_lst:
         for additional_cluster in predictors_lst:
-            all_add = df[f"{additional_cluster}{target_col_suffix}"].shift(1)
-            cov_past[f"{additional_cluster}_lag1"] = all_add.reindex(past_idx)
+            if f"{additional_cluster}{target_col_suffix}" in df.columns:
+                all_add = df[f"{additional_cluster}{target_col_suffix}"].shift(1)
+                cov_past[f"{additional_cluster}_lag1"] = all_add.reindex(past_idx)
+            else:
+                print(f"Warning! There is no {additional_cluster}{target_col_suffix} at df")
+                
 
     cov_past = cov_past.fillna(method="bfill").fillna(method="ffill")
     cov_future = None
