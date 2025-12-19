@@ -280,18 +280,25 @@ class ClusterForecaster:
             uses_future_covariates = future_cov_ts is not None
         elif model_type_lower == "nbeats" or model_type_lower == "n-beats":
             # keep your previous NBEATS behaviour
+            # Force CPU accelerator since MPS (Mac) doesn't support float64
             model = NBEATSModel(input_chunk_length=past_covariate_lags,
-                                output_chunk_length=output_chunk_length_model)
+                                output_chunk_length=output_chunk_length_model,
+                                pl_trainer_kwargs={"accelerator": "cpu"})
             # NBEATS supports covariates if configured (we pass past_covariates below)
             uses_covariates = True
             uses_future_covariates = False
         elif model_type_lower == "tftmodel":
+            # Filter out kwargs not supported by TFTModel
+            model_kwargs.pop("lags", None)
+            model_kwargs.pop("lags_future_covariates", None)
+            model_kwargs.pop("lags_past_covariates", None)
+            # Force CPU accelerator since MPS (Mac) doesn't support float64
             model = TFTModel(input_chunk_length=past_covariate_lags,
                             output_chunk_length=output_chunk_length_model,
                             add_relative_index=True,
                             add_encoders=None,  # Disable automatic encoders if you're handling covariates manually
+                            pl_trainer_kwargs={"accelerator": "cpu"},
                             **model_kwargs)
-            model_kwargs.pop("lags_future_covariates", (1, 6))
             uses_covariates = True
             uses_future_covariates = True
         elif model_type_lower == "naiveseasonal":
@@ -352,7 +359,7 @@ class ClusterForecaster:
                      )
         else:
             # baseline / many statistical models: just fit on series
-            model.fit(series=target_ts, verbose=True)
+            model.fit(series=target_ts)
 
         self.model = model
         # store the slices used for training

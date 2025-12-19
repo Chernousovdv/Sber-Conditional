@@ -56,11 +56,16 @@ def transform_categories(df: pd.DataFrame,
     categoris_by_normalized_ts = {}
     print(df.columns)
     for ts_name in df.columns:
-        ts_name_true = ts_name.replace("/", " ")
-        if ts_name_true not in features_to_cat.keys():
-            print(f"{ts_name_true} not in columns df")
+        ts_name_true = ts_name.replace("/", " ").strip()
+        if ts_name_true not in [k.strip() for k in features_to_cat.keys()]:
+            print(f"'{ts_name_true}' not in columns df")
             continue
-        category_name = features_to_cat.get(ts_name_true)
+        # Find the actual key in features_to_cat (in case it wasn't stripped there)
+        category_name = None
+        for k, v in features_to_cat.items():
+            if k.strip() == ts_name_true:
+                category_name = v
+                break
         df[f"{ts_name}_norm"] = normalize_series(df[f"{ts_name}"], method=norm_method)
         cat_norm_name = f"{category_name}_norm"
         if cat_norm_name not in categoris_by_normalized_ts:

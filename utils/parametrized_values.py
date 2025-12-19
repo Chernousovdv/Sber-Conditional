@@ -303,9 +303,47 @@ def disaggregate_predictions_to_TS(df_in: pd.DataFrame,
         scaling_date = train_end - pd.DateOffset(months=prediction_horizon)
     else:
         scaling_date = train_end 
-    print(scaling_date)
-   
-    scaled_vals = np.diff(pred_df[f"{cluster_name}_norm_sum"] / df[df.index == scaling_date][f"{cluster_name}_norm_sum"].iloc[0])
+    print(f"scaling_date: {scaling_date}")
+    
+    # Find the correct column name in pred_df (it may vary: cluster_name, cluster_name_norm_sum, cluster_name_preds, etc.)
+    pred_col = None
+    possible_names = [
+        f"{cluster_name}_norm_sum",
+        f"{cluster_name}",
+        f"{cluster_name}_preds",
+        cluster_name
+    ]
+    for name in possible_names:
+        if name in pred_df.columns:
+            pred_col = name
+            break
+    
+    if pred_col is None:
+        # Fallback: use the first column if only one exists
+        if len(pred_df.columns) == 1:
+            pred_col = pred_df.columns[0]
+        else:
+            raise KeyError(f"Could not find prediction column for cluster '{cluster_name}' in pred_df. Available columns: {list(pred_df.columns)}")
+    
+    # Find the correct column name in df for scaling
+    df_col = None
+    possible_df_names = [
+        f"{cluster_name}_norm_sum",
+        f"{cluster_name}",
+        cluster_name
+    ]
+    for name in possible_df_names:
+        if name in df.columns:
+            df_col = name
+            break
+    
+    if df_col is None:
+        raise KeyError(f"Could not find scaling column for cluster '{cluster_name}' in df. Available columns: {list(df.columns)}")
+    
+    print(f"Using pred_col='{pred_col}', df_col='{df_col}'")
+    
+    scaling_value = df[df.index == scaling_date][df_col].iloc[0]
+    scaled_vals = np.diff(pred_df[pred_col] / scaling_value)
     scaled_vals = np.cumsum(np.array(list(scaled_vals)+[0])) + 1
 
     ts_to_scale = []
@@ -383,13 +421,17 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
                                         cov_past,
                                         cov_future if use_future_macro else None,
                                         is_backtest=is_backtest).to_dataframe().reset_index(drop=True)
-    if len(future_forecaster_ts_name) == 0:
-        print(future_forecaster_ts_name)
+    if len(future_forecaster_ts_name) == 0 or len(future_forecaster_ts_values) == 0:
         increase_by_changes = False
         changes = []
     else:
-        increase_by_changes = category_map.get(ts_to_predict_name, "") == category_map.get(future_forecaster_ts_name[0], "")
-        changes = [(x / future_forecaster_ts_values[0][0]) - 1 for x in future_forecaster_ts_values[0]]
+        # Check if first element is also a non-empty list
+        if not isinstance(future_forecaster_ts_values[0], (list, np.ndarray)) or len(future_forecaster_ts_values[0]) == 0:
+             increase_by_changes = False
+             changes = []
+        else:
+             increase_by_changes = category_map.get(ts_to_predict_name, "") == category_map.get(future_forecaster_ts_name[0], "")
+             changes = [(x / future_forecaster_ts_values[0][0]) - 1 for x in future_forecaster_ts_values[0]]
         print(f'changes = {changes}')
 
     ts_to_cats = {k: category_map[k] for k in set(list(category_map.keys())) - set(['Подсолнечное масло (наливом) не бутилированное, не'])}
@@ -400,8 +442,9 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
         return predictions[f"{ts_to_predict_name}_preds"], predictions
 
     else:
+        # Always pass df (cluster data) because disaggregate_predictions_to_TS needs columns with _norm_sum suffix
         df_per_ts = disaggregate_predictions_to_TS(
-            df_target,
+            df,  # Use df (from df_in.dropna()), not df_target which might be macro_data
             predictions,
             category_to_pred,
             past_idx[-1],
@@ -414,5 +457,36 @@ def get_prediction_for_ts(df_in: pd.DataFrame,
 
     if predicted_index is not None:
         df_per_ts.index = predicted_index
+    
+    # Find the correct prediction column name
+    # ts_to_predict_name may have suffix like '_norm_sum' but the created column may not
+    ts_base_name = ts_to_predict_name.replace("_norm_sum", "").replace("/", " ")
+    possible_pred_names = [
+        f"{ts_to_predict_name}_preds",
+        f"{ts_base_name}_preds",
+        ts_to_predict_name,
+        ts_base_name
+    ]
+    
+    pred_col_name = None
+    for name in possible_pred_names:
+        if name in df_per_ts.columns:
+            pred_col_name = name
+            break
+    
+    if pred_col_name is None:
+        # Fallback: find any column ending with _preds
+        preds_cols = [c for c in df_per_ts.columns if c.endswith('_preds')]
+        if preds_cols:
+            # Find the one that best matches ts_to_predict_name
+            for c in preds_cols:
+                if ts_base_name in c or ts_to_predict_name in c:
+                    pred_col_name = c
+                    break
+            if pred_col_name is None:
+                pred_col_name = preds_cols[0]  # Use first available
+        else:
+            raise KeyError(f"Could not find prediction column for '{ts_to_predict_name}'. Available columns: {list(df_per_ts.columns)}")
+    
     # returns (TS prediction, metric result(if backtest), Cluster predictions)
-    return df_per_ts[f"{ts_to_predict_name}_preds"], predictions
+    return df_per_ts[pred_col_name], predictions
